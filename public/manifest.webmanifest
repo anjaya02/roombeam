@@ -1,0 +1,19 @@
+{
+  "name": "RoomBeam — files, straight across",
+  "short_name": "RoomBeam",
+  "description": "Send files between any two devices on the same network. No installs, no accounts, and the file data never leaves your local network.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1015",
+  "theme_color": "#0e1015",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

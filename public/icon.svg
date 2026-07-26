@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RoomBeam">
+  <rect width="512" height="512" rx="116" fill="#10131a"/>
+  <circle cx="92" cy="256" r="30" fill="#6c94ff"/>
+  <rect x="146" y="234" width="176" height="44" rx="22" fill="#6c94ff"/>
+  <path d="M330 168 L330 344 L444 256 Z" fill="#f4f6fb"/>
+</svg>
