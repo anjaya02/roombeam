@@ -194,7 +194,7 @@ Capability cascade — detect at runtime, use the best available:
 
 | Tier | API | Where | Size limit |
 |---|---|---|---|
-| 1 | `showSaveFilePicker()` + `FileSystemWritableFileStream` | Chromium desktop **and Android Chrome** (measured — see §15) | Free disk space |
+| 1 | `showSaveFilePicker()` + `FileSystemWritableFileStream` | Chromium desktop **and Android Chrome** (measured — see §14) | Free disk space |
 | 2 | **OPFS** + `createSyncAccessHandle()` in a Worker, then hand off a `Blob` | Chrome, Edge, Firefox, **Safari 15.2+**, Android Chrome | Storage quota |
 | 3 | Service-worker-intercepted streaming download | Chromium, Firefox | Unbounded, fiddly |
 | 4 | In-memory `Blob` + `<a download>` | Everything | **RAM — small files only** |
@@ -301,11 +301,11 @@ Licence: **AGPL-3.0** or **MIT** — decide early. AGPL keeps hosted forks open;
 |---|---|---|
 | **M0** | This document | |
 | **M1** | Proof of concept: two browsers, hardcoded room, one file over the LAN | Validates WebRTC on *your* actual hardware and network before any investment in structure |
-| **M2** | Signaling server; **QR + room code as the primary path**; auto-IP grouping as a bonus that may fail | Reordered per §14.1 — unreliable discovery is the loudest complaint against existing tools |
-| **M3** | Robust transfer: negotiated chunk size, backpressure, OPFS receive, **resume**, progress, cancel, multi-file | The engineering core. Resume promoted from M6 per §14.2 |
-| **M4** | PWA, device names, accept prompts, local-path badge, **diagnostics panel** | Diagnostics added per §14.5 — cheapest differentiator available |
+| **M2** | Signaling server; **QR + room code as the primary path**; auto-IP grouping as a bonus that may fail | Automatic discovery cannot carry the product: public-IP grouping breaks under IPv6, carrier NAT, VPNs and reverse proxies. A code the user can read aloud always works |
+| **M3** | Robust transfer: negotiated chunk size, backpressure, OPFS receive, **resume**, progress, cancel, multi-file | The engineering core. Resume belongs here rather than later — a transfer that dies at 33% and *can* resume is an annoyance; one that silently restarts is why people abandon a tool |
+| **M4** | PWA, device names, accept prompts, local-path badge, **diagnostics panel** | A failure the user cannot explain is indistinguishable from a broken product, and the ICE data needed to explain it is already in hand |
 | **M5** | One-to-many broadcast (classroom mode) | The feature differentiator — see below |
-| **M6** | Folder transfer, self-hosting Compose file + `/health` self-check | Per §14.6 |
+| **M6** | Folder transfer, self-hosting Compose file + `/health` self-check | A misconfigured proxy breaks discovery while everything else looks fine; a self-check turns that from a mystery into a message |
 
 ### M5 — classroom broadcast, in more detail
 
@@ -366,78 +366,7 @@ Also on Windows: the first `vite --host` will trigger a Windows Firewall prompt.
 
 ---
 
-## 14. Validated pain points (researched, not assumed)
-
-Complaints against PairDrop and Snapdrop, gathered from their issue trackers and user forums. These are the *actual* gaps — they reorder the roadmap and they're the honest justification for building anything at all.
-
-### 14.1 Discovery is unreliable — the loudest complaint by far
-
-Reported repeatedly and across years: [#99](https://github.com/schlagmichdoch/PairDrop/issues/99), [#310](https://github.com/schlagmichdoch/PairDrop/issues/310), [#352](https://github.com/schlagmichdoch/PairDrop/issues/352), [#21](https://github.com/schlagmichdoch/PairDrop/issues/21), [#356](https://github.com/schlagmichdoch/PairDrop/discussions/356), and [LinuxServer's forum](https://discourse.linuxserver.io/t/issue-with-not-being-able-to-detect-devices-pairdrop-image/8964). Symptoms:
-
-- Devices on the same Wi-Fi simply don't appear
-- Sometimes appear after 1–2 minutes, usually never
-- Paired devices show as `undefined`; "devices are not persistent" errors
-- Works on pairdrop.net but not on a self-hosted instance
-- Android on mobile data can't pair with a computer
-
-Root cause is architectural: **automatic discovery depends on public-IP grouping**, which breaks under IPv6, carrier-grade NAT, VPNs, multiple egress IPs, and — very commonly — reverse proxies that don't forward the real client IP.
-
-> **Design consequence — this is the big one.** Auto-IP grouping cannot be the primary discovery mechanism. **QR code and room code become the default path**, with auto-discovery as a bonus that's allowed to fail silently. This inverts the priority in §4 and is the single most important lesson from the research.
-
-### 14.2 Large transfers die mid-flight, with no error
-
-[#120](https://github.com/schlagmichdoch/PairDrop/issues/120): a 500 MB video reaches roughly one third, then "just ends prematurely" with no message. Open and unresolved.
-
-> **Design consequence:** validates backpressure (§5.2) and `resume-from` (§5.3) as v1 requirements rather than nice-to-haves. A transfer that dies at 33% and can resume is an inconvenience; one that silently restarts is why people give up on a tool.
-
-### 14.3 Slow, and asymmetrically so
-
-[#359](https://github.com/schlagmichdoch/PairDrop/issues/359): Android → Windows becomes "unusable" above ~100 MB, while Windows → Android is fine. Same asymmetry on both pairdrop.net and self-hosted.
-
-In [an independent 2 GB benchmark](https://www.makeuseof.com/file-transfer-speed-test-localsend-blip-pairdrop/), PairDrop came last: **1:38 vs LocalSend's 1:20** — not a catastrophe, but consistently slowest, and LocalSend is native.
-
-> **Design consequence:** a direction-dependent slowdown points at sender-side chunk sizing and buffer tuning, not the network. Negotiate chunk size against `pc.sctp.maxMessageSize` rather than hardcoding it, and treat the high/low watermarks in §5.2 as values to *measure per platform*, not guess once. Benchmark both directions separately — the asymmetry only shows up if you test both.
-
-### 14.4 iOS receive failures
-
-Long-standing on Snapdrop ([#61](https://github.com/RobinLinus/snapdrop/issues/61), [#83](https://github.com/RobinLinus/snapdrop/issues/83), [#247](https://github.com/RobinLinus/snapdrop/issues/247)): discovery succeeds, then receiving fails with **blob resource errors**.
-
-> **Design consequence:** this is precisely the in-memory-`Blob` ceiling described in §6. It's the strongest evidence that the OPFS tier is the correct first build target. The bug is a direct consequence of an architecture that assembles files in RAM.
-
-### 14.5 Failures are silent and unexplainable
-
-A theme running through every thread above: when it doesn't work, **users have no idea why**, so the advice degrades into folklore — clear your cache, disable your VPN, turn off your ad blocker, try another browser.
-
-> **Design consequence — cheapest differentiator available.** The candidate-pair inspection in §7.3 already yields the data to say what actually went wrong. Build a real diagnostics panel:
-> - "Your network blocks device-to-device traffic (client isolation) — try a mobile hotspot"
-> - "These devices are on different networks — scan the QR code instead"
-> - "The receiver has 400 MB free but this file is 1.2 GB"
-> - A self-host checklist that verifies proxy headers and `wss://` and reports what's misconfigured
->
-> Almost no engineering cost. Addresses the complaint underlying all the others.
-
-### 14.6 Self-hosting is fragile
-
-[#310](https://github.com/schlagmichdoch/PairDrop/issues/310) is a misconfigured Apache proxy — `http`/`ws` instead of `https`/`wss`, real client IP not forwarded — which silently breaks discovery while everything else appears to work.
-
-> **Design consequence:** ship one Docker Compose file that works unmodified, plus a `/health` page that self-diagnoses proxy headers, WSS upgrade, and detected client IP.
-
-### 14.7 Summary — what actually differentiates this project
-
-| Their complaint | Our answer |
-|---|---|
-| Devices don't show up | QR/code-first discovery; auto-IP is a bonus, not the mechanism |
-| Big files die at 33% | Backpressure + resumable transfers from v1 |
-| Too slow, worse in one direction | Negotiated chunk size, measured watermarks, both directions benchmarked |
-| iOS can't receive large files | OPFS streaming to disk, built first, not retrofitted |
-| No idea why it failed | Diagnostics panel naming the actual cause |
-| Self-hosting silently breaks | One working Compose file + self-check endpoint |
-
-Note that **none of these are new features.** They are all reliability and honesty. That is genuinely where the room is.
-
----
-
-## 15. M1 measured results
+## 14. M1 measured results
 
 First real run: **Windows 11 / Edge** ↔ **Android Chrome**, same Wi-Fi, 2026-07-26.
 
@@ -461,7 +390,7 @@ This is good news, and it narrows the problem: the storage-tier risk is now **sp
 
 ### Finding 2 — throughput is bad: ~2 MB/s
 
-A 1.2 GB file moved PC → Android at **2.0 MB/s** (receiver measured 1.9 MB/s). Expected range was 10–50 MB/s. At this rate that file needs ~10 minutes, which is worse than the tools in §14.3 and not shippable.
+A 1.2 GB file moved PC → Android at **2.0 MB/s** (receiver measured 1.9 MB/s). Expected range was 10–50 MB/s. At this rate that file needs ~10 minutes, which is not shippable.
 
 Unresolved. Candidate causes, roughly in order of suspicion:
 
@@ -472,15 +401,15 @@ Unresolved. Candidate causes, roughly in order of suspicion:
 
 **The experiment that separates these:** a discard mode on the receiver that counts bytes without writing them. If throughput jumps, it is cause 1. If it does not, it is cause 2 and no amount of code will fix it. Run a plain LAN speed test between the same two devices first — that bounds what is achievable and costs nothing.
 
-Do not optimise before this measurement. Guessing here is how §14.3 happens.
+Do not optimise before this measurement. Tuning the wrong layer is how a performance bug becomes permanent.
 
 ### Finding 3 — connection failed in one direction
 
-Android → PC failed to connect while PC → Android succeeded moments later, same devices, same network. Not diagnosed; the failure message was too vague to distinguish "the other side never replied" from "every route was tried and failed" — fixed since (§15.1).
+Android → PC failed to connect while PC → Android succeeded moments later, same devices, same network. Not diagnosed; the failure message was too vague to distinguish "the other side never replied" from "every route was tried and failed" — fixed since (§14.1).
 
 Whether this is a genuine directional asymmetry or ordinary first-attempt flakiness is unknown. Needs repeat runs in both directions.
 
-### 15.1 Fixes made after the run
+### 14.1 Fixes made after the run
 
 Three defects the run exposed:
 
@@ -488,7 +417,7 @@ Three defects the run exposed:
 - **Status text never advanced past "Waiting to accept."** A transfer showed 58 MB / 1.2 GB moving at 2.0 MB/s while still claiming it was waiting for permission.
 - **Failure diagnosis conflated three distinct causes.** "No candidates at all" was reported when the real situation was "no pair was formed." Now separated into no-local-candidates (VPN), no-remote-candidates (other side never replied), no-pair (stalled handshake), and all-pairs-failed (client isolation).
 
-### 15.2 Still untested
+### 14.2 Still untested
 
 - **Any Apple device.** iPhone ↔ Windows is a headline use case and remains entirely unverified.
 - **Firefox**, on either end.
@@ -497,40 +426,24 @@ Three defects the run exposed:
 
 ---
 
-## Prior art
+## What RoomBeam is betting on
 
-Read these before writing code. Not to be discouraged — to avoid re-deriving solved problems.
+Four things, in priority order. They are the reason the roadmap is shaped the way it is:
 
-- **[PairDrop](https://github.com/schlagmichdoch/PairDrop)** — the closest existing thing to this design: web app, WebRTC, public-IP room grouping, room codes. Actively maintained. Study its ICE handling and its receive-side code.
-- **[Snapdrop](https://github.com/RobinLinus/snapdrop)** — the original; PairDrop's ancestor.
-- **[LocalSend](https://github.com/localsend/localsend)** — native, Flutter, genuinely offline with real mDNS discovery. What you'd build if you weren't constrained to a browser. Good reference for the protocol design and for what the sandbox costs you.
+1. **Discovery that always works.** A code the user can read aloud, or a QR on a projector — never a mechanism that silently fails and leaves them guessing.
+2. **Transfers that survive.** Backpressure so large files don't die partway, and resume so that when a connection drops the work isn't lost.
+3. **Failures that explain themselves.** The ICE data needed to say *why* a connection failed is already available; not surfacing it is a choice, and the wrong one.
+4. **A verifiable privacy claim.** The app inspects its own candidate pair and reports whether the bytes stayed local. Checkable, not asserted.
 
-**Where the room actually is:** one-to-many broadcast, large files on iOS, honest local-path verification, and the offline host mode. Those are the gaps in the existing tools — not basic 1:1 transfer, which is well covered.
+None of these are new features. They are reliability, and reliability is the whole product.
 
-### What RoomBeam owes to PairDrop and Snapdrop
+---
 
-Stated plainly, because the repo is public and this needs to be unambiguous.
+## Related projects
 
-**Code taken: none.** Not a line. Their source was not read or copied, and RoomBeam carries no code derived from either project. Everything in `server.js` and `public/index.html` was written from scratch. This matters legally — Snapdrop and PairDrop are GPL-family licensed, and copied code would bind this project to those terms. It does not, because there is none.
+Other tools in this space, worth knowing before writing code — partly to avoid re-deriving solved problems, partly because their protocol choices are instructive:
 
-**Concepts adopted** — theirs first, and RoomBeam uses them knowingly:
+- **[LocalSend](https://github.com/localsend/localsend)** — native, Flutter, genuinely offline with real mDNS discovery. What you'd build if you weren't constrained to a browser, and a good illustration of exactly what the sandbox costs you.
+- **[PairDrop](https://github.com/schlagmichdoch/PairDrop)** and **[Snapdrop](https://github.com/RobinLinus/snapdrop)** — the closest existing browser-based approach: WebRTC, public-IP peer grouping, room codes.
 
-| Idea | Origin |
-|---|---|
-| A *web app* (not a native app) doing local WebRTC file transfer | Snapdrop originated the whole category |
-| Grouping peers automatically by public IP so same-network devices auto-appear (§4.1) | Snapdrop / PairDrop's discovery mechanism |
-| Room codes for pairing across networks (§4.2) | PairDrop's addition over Snapdrop |
-| Generated human-readable device names instead of accounts (§4.3) | Snapdrop's convention |
-
-**What came from their bug reports** — this is the larger debt, and it is entirely about priorities rather than implementation. Every item in §14 is a decision made *because* users reported it broken elsewhere:
-
-| Their reported failure | What it changed here |
-|---|---|
-| Devices don't appear (§14.1) | QR/room code promoted to the primary path; auto-IP demoted to a bonus |
-| Large files die partway, silently (§14.2) | Backpressure and resume moved into v1 scope |
-| Slow, and asymmetrically so (§14.3) | Chunk size negotiated from `sctp.maxMessageSize`; both directions benchmarked separately |
-| iOS "blob resource" errors (§14.4) | Tiered storage cascade, built before the desktop-only convenience path |
-| Nobody can tell why it failed (§14.5) | Diagnostics panel and ICE candidate-pair path reporting |
-| Self-hosting breaks silently (§14.6) | One working Compose file plus a `/health` self-check |
-
-Their issue trackers were, in effect, years of free user research. The honest summary is that **PairDrop and Snapdrop defined the category and RoomBeam is trying to be the reliable version** — which is only possible because their users documented precisely where it breaks.
+**RoomBeam shares no code with any of them.** `server.js` and `public/index.html` were written from scratch. This is worth stating precisely because several of these projects are GPL-family licensed, and derived code would bind this project to those terms — it does not, because there is none.

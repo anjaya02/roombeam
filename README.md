@@ -61,12 +61,12 @@ M1's job is to answer five questions on *your* hardware. Every answer is on scre
 | 4 | Did the file arrive intact? | `checksum verified` on the receiving side |
 | 5 | **Which storage tier does each device use?** | `via disk (File System Access)` / `via OPFS stream` / `via memory` |
 
-Question 5 is the important one. It decides the maximum practical file size per platform, and it's the direct cause of the iOS failures documented in DESIGN.md §14.4. The **Diagnostics** panel at the bottom of the page reports each device's capabilities independently.
+Question 5 is the important one. It decides the maximum practical file size per platform: the memory tier holds the whole file in RAM, which is what makes large receives fail on iOS. The **Diagnostics** panel at the bottom of the page reports each device's capabilities independently.
 
 ### Worth testing deliberately
 
-- **A large file** (500 MB+) from **phone → PC**. This is the exact case that fails at ~⅓ with no error in comparable tools ([DESIGN.md §14.2](DESIGN.md)).
-- **Both directions** with the same file. A direction-dependent slowdown is a known complaint elsewhere (§14.3) and only shows up if you test both.
+- **A large file** (500 MB+) from **phone → PC**. Most likely to expose a backpressure problem — the failure mode is a transfer that dies partway with no error.
+- **Both directions** with the same file. A direction-dependent slowdown is easy to miss and only shows up if you test both.
 - **iPhone as receiver**, if you have one. That's the platform with the least headroom.
 - **A hostile network** — school or café Wi-Fi. Expect failure, and check the app *explains* it instead of hanging.
 
