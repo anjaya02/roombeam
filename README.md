@@ -87,7 +87,7 @@ Known and intentional; not bugs to report:
 server.js            HTTPS static server + WebSocket signalling relay (~200 lines)
 public/index.html    the entire client — UI, WebRTC, chunking, storage tiers
 certs/               generated on first run; do not commit
-DESIGN.md            architecture, researched complaints, roadmap
+DESIGN.md            architecture, design rationale, measured results, roadmap
 ```
 
 The signalling server never sees file data. Its only job is to let two browsers exchange the connection details they need, because **a browser cannot discover devices on a local network** — no mDNS, no UDP broadcast, no raw sockets. That constraint is the reason this component exists at all.

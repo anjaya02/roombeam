@@ -302,7 +302,7 @@ Licence: **AGPL-3.0** or **MIT** — decide early. AGPL keeps hosted forks open;
 | **M0** | This document | |
 | **M1** | Proof of concept: two browsers, hardcoded room, one file over the LAN | Validates WebRTC on *your* actual hardware and network before any investment in structure |
 | **M2** | Signaling server; **QR + room code as the primary path**; auto-IP grouping as a bonus that may fail | Automatic discovery cannot carry the product: public-IP grouping breaks under IPv6, carrier NAT, VPNs and reverse proxies. A code the user can read aloud always works |
-| **M3** | Robust transfer: negotiated chunk size, backpressure, OPFS receive, **resume**, progress, cancel, multi-file | The engineering core. Resume belongs here rather than later — a transfer that dies at 33% and *can* resume is an annoyance; one that silently restarts is why people abandon a tool |
+| **M3** | Robust transfer: negotiated chunk size, backpressure, OPFS receive, **resume**, progress, cancel, multi-file | The engineering core. Resume belongs here rather than later — a long transfer that drops and *can* resume is an annoyance; one that silently starts over is a reason to stop using the tool |
 | **M4** | PWA, device names, accept prompts, local-path badge, **diagnostics panel** | A failure the user cannot explain is indistinguishable from a broken product, and the ICE data needed to explain it is already in hand |
 | **M5** | One-to-many broadcast (classroom mode) | The feature differentiator — see below |
 | **M6** | Folder transfer, self-hosting Compose file + `/health` self-check | A misconfigured proxy breaks discovery while everything else looks fine; a self-check turns that from a mystery into a message |

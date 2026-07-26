@@ -367,9 +367,9 @@ async function sendFile(peerId, file) {
     return;
   }
 
-  // Respect the negotiated SCTP limit rather than hardcoding a chunk size —
-  // guessing here is a likely cause of the direction-dependent slowness
-  // reported against similar tools.
+  // Respect the negotiated SCTP limit rather than hardcoding a chunk size.
+  // A hardcoded value that happens to exceed one platform's limit, or falls
+  // far below it, shows up as throughput that differs by direction.
   const maxMsg = c.pc.sctp?.maxMessageSize || 65536;
   const chunkSize = Math.max(16384, Math.min(maxMsg, 262144));
   c.dc.send(JSON.stringify({ t: 'start', chunkSize }));
@@ -571,8 +571,9 @@ async function makeWriter(name) {
     } catch { /* fall through to memory */ }
   }
 
-  // Tier 3 — in memory. Works everywhere, dies on large files. This is the
-  // tier behind the "blob resource" failures reported on iOS.
+  // Tier 3 — in memory. Works everywhere, dies on large files: the whole file
+  // is held in RAM, so iOS Safari kills the tab somewhere in the low hundreds
+  // of MB. Last resort only.
   const parts = [];
   return {
     tier: 'memory (small files only)',
@@ -604,8 +605,8 @@ async function describePath(pc) {
 }
 
 // Three failures that look identical to the user have completely different
-// causes. Conflating them is exactly the "nobody can tell why it broke"
-// complaint this project exists to fix, so separate them explicitly.
+// causes and completely different fixes. Reporting one message for all of
+// them tells the user nothing actionable, so separate them explicitly.
 async function diagnoseFailure(c) {
   const stats = await c.pc.getStats();
   let localCandidates = 0, remoteCandidates = 0, pairs = 0;
