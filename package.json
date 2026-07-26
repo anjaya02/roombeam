@@ -15,7 +15,7 @@
     "selfsigned": "^2.4.1",
     "ws": "^8.18.0"
   },
-  "license": "MIT",
+  "license": "UNLICENSED",
   "keywords": [
     "file-transfer",
     "webrtc",

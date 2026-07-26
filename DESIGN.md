@@ -4,7 +4,7 @@
 
 **Status:** M4 delivered — room codes, robust transfer, PWA, diagnostics. M5 (broadcast) and M6 (folders) not started.
 **Package / repo name:** `roombeam`
-**Licence:** MIT
+**Licence:** Proprietary — all rights reserved. Not open source.
 **Last updated:** 2026-07-26
 
 ---
@@ -337,7 +337,7 @@ The second reason is the development loop. Testing this app means real devices o
 
 **Why no QR decoder.** Scanning uses `BarcodeDetector` where it exists and typing the five characters everywhere else. Writing a decoder is a far larger problem than an encoder — perspective correction, thresholding, error correction — and iOS does not need it: the system camera scans a QR and opens the link, which is the same journey with fewer steps. Displaying the QR is what has to work everywhere, and that is the encoder's job.
 
-Licence: **MIT**. Decided — see §13.
+Licence: **proprietary, all rights reserved**. Decided — see §13.
 
 ---
 
@@ -413,7 +413,11 @@ Also on Windows: the first `vite --host` will trigger a Windows Firewall prompt.
 
 ## 13. Open questions
 
-1. ~~**Licence**~~ — **resolved: MIT.** Maximum adoption, and the value of this project is that it works everywhere rather than that nobody forks it.
+1. ~~**Licence**~~ — **resolved: proprietary, all rights reserved.** The repository is private and the project is not being distributed, so no licence grant is made to anyone.
+
+   Worth being precise about why this is not merely "we left the LICENSE file out". A permissive licence is an *irrevocable* grant to every copy already handed over: publishing MIT and then going private does not take the grant back from anyone who received the code in the meantime. So the file states the reservation explicitly rather than relying on the absence of one.
+
+   This closes the open question in the opposite direction from the one it was asked in — it was originally about unblocking outside contributions, and there will not be any. What it does *not* change: the dependency policy in §9 and the provenance claim below still matter, because a proprietary project has more reason to know exactly what third-party code it contains, not less.
 2. **Maximum supported file size**, per platform tier — still open, and now the *right* kind of open: the app reports which tier a device landed on and refuses a transfer it cannot fit, so the failure is a message rather than a mystery. What is missing is the measured number per platform.
 3. ~~**Integrity checking** — default on or off?~~ — **resolved: on.** The question assumed hashing has to cost throughput. It does not, if neither end hashes on the thread doing the work: the sender's worker reads the file itself rather than being handed copies, and the receiver folds it in inside the storage worker on bytes already in hand.
 4. **Name and domain.** Still open.
@@ -580,7 +584,9 @@ None of these are new features. They are reliability, and reliability is the who
 
 ## Provenance
 
-Every line of this project is original work, written from scratch for it. RoomBeam incorporates no third-party source, and its only runtime dependencies are `ws` and `selfsigned` — both server-side, both declared in `package.json`. **The browser loads no dependency at all**, which is also what makes the content-security policy in §7 enforceable: the page cannot reach a third party even if a future edit tried to.
+Every line of this project is original work, written from scratch for it. RoomBeam incorporates no third-party source, and its only runtime dependencies are `ws` and `selfsigned` — both server-side, both MIT, both declared in `package.json` and neither redistributed from this repository. **The browser loads no dependency at all**, which is also what makes the content-security policy in §7 enforceable: the page cannot reach a third party even if a future edit tried to.
+
+That the codebase is entirely original matters more now that it is proprietary (§13.1) than it would in an open project: there is no inherited licence to comply with, nothing to attribute, and no question about what may be kept closed.
 
 Written from scratch rather than taken from a library, in each case for a stated reason:
 

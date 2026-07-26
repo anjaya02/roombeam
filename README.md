@@ -206,4 +206,8 @@ Stated plainly because "untested" and "working" are easy to confuse:
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+**Proprietary — all rights reserved.** Not open source. See [LICENSE](LICENSE).
+
+The two runtime dependencies (`ws`, `selfsigned`) are MIT and permit private and
+commercial use freely. Their notices only need to travel with the software if it
+is ever distributed as a bundle, installer or image.
