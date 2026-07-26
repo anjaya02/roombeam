@@ -1,3 +1,8 @@
 node_modules/
 certs/
 *.log
+
+# Screenshots from tools/screenshot.mjs. The icons under public/ are committed;
+# these are throwaway output.
+/roombeam.png
+/shot-*.png
