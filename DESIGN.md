@@ -2,8 +2,9 @@
 
 **Files, straight across.**
 
-**Status:** Draft v1
+**Status:** M4 delivered — room codes, robust transfer, PWA, diagnostics. M5 (broadcast) and M6 (folders) not started.
 **Package / repo name:** `roombeam`
+**Licence:** MIT
 **Last updated:** 2026-07-26
 
 ---
@@ -80,7 +81,7 @@ Three components:
 | Component | What it is | Where it runs |
 |---|---|---|
 | **Client** | Installable PWA, static files | Any browser |
-| **Signaling server** | ~300 lines, WebSocket, in-memory rooms | Small VPS / Cloudflare / self-hosted |
+| **Signaling server** | ~450 lines, WebSocket, in-memory rooms | Small VPS / Cloudflare / self-hosted |
 | **Transport** | WebRTC DataChannel | Peer-to-peer on the LAN |
 
 The signaling server is stateless across restarts, holds no database, and stores nothing on disk. A dropped signaling connection does not interrupt an in-flight transfer — once the DataChannel is open, the server is irrelevant.
@@ -116,15 +117,24 @@ A 5-character code (Crockford base32, ambiguity-free alphabet: no `I`/`L`/`O`/`U
 JSON over WebSocket. Deliberately minimal:
 
 ```
-→ join          { room?, name, pubkey }
-← peers         [{ id, name, pubkey }]
-← peer-joined   { id, name, pubkey }
+→ join          { mode: 'network'|'code'|'new', code?, name, pubkey }
+← welcome       { id, room: { kind, code, size }, peers: [{ id, name, pubkey }] }
+← room          { room, peers }        // after switching rooms on the same socket
+← peer-joined   { peer: { id, name, pubkey } }
 ← peer-left     { id }
+→ rename        { name }               // and ← peer-renamed { id, name }
 ↔ signal        { to, from, data: <SDP offer|answer|ICE candidate> }
 → ping / ← pong (keepalive; many hosts drop idle WS at 60s)
+← error         { code, message, fatal? }
 ```
 
+`mode: 'new'` asks the server to mint an unused code, because only the server can know which codes are live.
+
+Rooms can be switched on an existing socket rather than by reconnecting — a peer that changes rooms is announced as having left the old one. Reconnecting instead would mean a new session id and a device that appears to vanish and return.
+
 File metadata is **not** sent through signaling — it goes over the DataChannel, so the server never learns filenames.
+
+**One check on the relay matters:** a `signal` is only delivered if the target is in the *same room* as the sender. Without it, a socket could use the relay to reach any peer whose id it could guess, and room membership would be advisory rather than a boundary.
 
 ---
 
@@ -147,7 +157,7 @@ Standard WebRTC. `RTCPeerConnection` with a DataChannel:
 
 This is where naive implementations fall over. Non-negotiable details:
 
-- **Chunk size:** `min(pc.sctp.maxMessageSize, 262144)`, defaulting to **16 KiB** for maximum interop. Chrome reports 256 KiB; older stacks are lower. Negotiate, don't assume.
+- **Chunk size:** `min(pc.sctp.maxMessageSize, 262144)`, with a floor of **16 KiB** for maximum interop. Chrome reports 256 KiB; older stacks are lower. Negotiate, don't assume. Measured: Chromium reports 262,144 and the app uses 248,832 — 95% of the reported limit, because hitting it exactly is historically where interop breaks, and exceeding it closes the channel outright rather than erroring.
 - **Backpressure is mandatory.** Writing to a DataChannel in a tight loop buffers in memory and kills the tab.
 
 ```js
@@ -169,20 +179,28 @@ dc.send(chunk);
 Control messages as JSON strings, payload as `ArrayBuffer`, distinguished by `typeof event.data === 'string'`. No custom binary framing needed.
 
 ```
+↔ hello         { version, name, pubkey, nonce }        // on channel open
+↔ hello-proof   { signature }                           // see §7.2
 → offer-files   { transferId, files: [{ id, name, size, mime, mtime }] }
-← accept        { transferId, fileIds: [...] }        // or decline
-→ file-start    { fileId, chunkSize, chunkCount }
-→ <binary chunk> × chunkCount                          // sequential, in order
-→ file-end      { fileId, crc32? }
+← accept        { transferId, fileIds: [...] }          // or decline
+→ file-start    { transferId, fileId, chunkSize, offset }
+→ <binary chunk> × n                                    // sequential, in order
+→ file-end      { transferId, fileId, bytes, crc }
+← file-skip     { transferId, fileId, reason }          // receiver could not take this one
+← progress      { transferId, fileId, received }        // the authoritative count
+← flow          { transferId, pause }                   // storage backpressure
 ↔ cancel        { transferId, fileId?, reason }
-← resume-from   { fileId, chunkIndex }                 // reconnect path
+→ resume-query  { transferId }                          // reconnect path
+← resume-from   { transferId, fileId, available, offset }
 ```
 
 Notes:
 - **Receiver never auto-accepts.** Every incoming transfer requires an explicit tap. This is the primary defence against unwanted files from strangers on shared Wi-Fi.
-- Progress needs no messages — the receiver counts chunks, the sender watches `bufferedAmount` drain.
-- Integrity checking is *optional*. SCTP is reliable and checksummed; hashing 1 GB in JS costs real seconds. Offer CRC32 (fast, incremental, in a Worker) as a verification toggle rather than a default.
-- `resume-from` makes the protocol resumable even if v1 doesn't implement it. Designing it in now costs nothing; retrofitting it costs a rewrite.
+- **Progress flows backwards, from receiver to sender.** The sender only knows what it handed to the network stack, which overstates progress and never matches reality. The receiver's count is the one displayed on both ends.
+- **`flow` exists because the two queues are independent.** The sender's backpressure watches the DataChannel buffer; that says nothing about whether the receiver's storage is keeping up. Without a way for the receiver to say "hold on", a slow disk turns into unbounded memory growth on the receiving side over a long transfer.
+- Integrity checking is *optional*. SCTP is reliable and checksummed; hashing 1 GB in JS costs real seconds. **Shipped on by default**, because it can be made free: the sender hashes in a worker that reads the file itself rather than being handed copies of every chunk, and the receiver folds the checksum in inside the storage worker on bytes it already holds. Neither competes with the send loop.
+- **`resume-from` carries a byte offset, not a chunk index.** SCTP delivers whole messages, so the receiver always holds a chunk boundary — but a byte offset also survives the two ends negotiating a different chunk size after reconnecting, which a chunk index would silently misinterpret.
+- **Every message is validated into a known shape at the boundary**, once, so no handler downstream has to wonder. §14.3 records what happens when one of those validators is wrong.
 
 ---
 
@@ -194,10 +212,13 @@ Capability cascade — detect at runtime, use the best available:
 
 | Tier | API | Where | Size limit |
 |---|---|---|---|
-| 1 | `showSaveFilePicker()` + `FileSystemWritableFileStream` | Chromium desktop **and Android Chrome** (measured — see §14) | Free disk space |
+| 1a | `showDirectoryPicker()`, then one file handle per file | Chromium desktop | Free disk space |
+| 1b | `showSaveFilePicker()` + `FileSystemWritableFileStream` | Chromium desktop **and Android Chrome** (measured — see §14) | Free disk space |
 | 2 | **OPFS** + `createSyncAccessHandle()` in a Worker, then hand off a `Blob` | Chrome, Edge, Firefox, **Safari 15.2+**, Android Chrome | Storage quota |
 | 3 | Service-worker-intercepted streaming download | Chromium, Firefox | Unbounded, fiddly |
 | 4 | In-memory `Blob` + `<a download>` | Everything | **RAM — small files only** |
+
+Tier 1a is a late addition and it is not a refinement — it is the difference between a multi-file transfer working and not. A save dialog is only permitted while a user gesture is still active, and the accept tap is the only gesture available, so there is no way to ask twice. One folder dialog covers every file in the offer; without it, a multi-file transfer on Chromium has to fall back to a streaming tier for want of a second gesture. The same constraint has a second consequence: **the code path from the accept tap to the dialog must not `await` anything**, which is why capability detection is split into a synchronous half and an asynchronous one.
 
 **Tier 2 is the workhorse.** The Origin Private File System lets you stream to disk on iOS and Android without holding the file in RAM, then produce a `Blob` for the download at the end. Without it, mobile large-file transfer is not viable. Implement Tier 2 first, not Tier 1.
 
@@ -217,14 +238,17 @@ Worth calling out separately, since iPhone ↔ Windows is one of the two pairs w
 
 Every combination needs a real device check. Emulators do not reproduce these behaviours.
 
-| | Win Chrome | Win Firefox | macOS Safari | iOS Safari | Android Chrome |
+| | Win Chromium | Win Firefox | macOS Safari | iOS Safari | Android Chrome |
 |---|---|---|---|---|---|
-| **Win Chrome** | | | | | |
-| **macOS Safari** | ★ | | | | |
-| **iOS Safari** | ★ | | | | |
-| **Android Chrome** | | | | | |
+| **Win Chromium** | ✔ auto | — | — | — | ✔ M1 |
+| **macOS Safari** | ★ — | — | — | — | — |
+| **iOS Safari** | ★ — | — | — | — | — |
+| **Android Chrome** | ✔ M1 | — | — | — | — |
 
 ★ = the pairs that justify the project's existence. Get these right first.
+✔ auto = covered by the end-to-end test on every run. ✔ M1 = verified once, by hand.
+
+Both ★ rows are still empty, and no amount of automated Chromium testing will fill them. That is the honest state of this project: the two pairs it exists for have never been tried.
 
 ---
 
@@ -249,7 +273,21 @@ Every combination needs a real device check. Emulators do not reproduce these be
 | Malicious file content | Out of scope to scan; surface true name/size/type prominently and warn on executable extensions |
 | Signaling server abuse / spam | Per-IP connection and message rate limits; room size caps; short idle timeouts |
 | MITM on the LAN | DataChannel is DTLS-encrypted with fingerprints exchanged via signaling over WSS |
-| Malicious *signaling server* substituting DTLS fingerprints | Real residual risk. Mitigate with an optional out-of-band short authentication string both users compare — worth designing, not necessarily shipping in v1 |
+| Malicious *signaling server* substituting DTLS fingerprints | **Mitigated, and it turned out to be cheap.** Two mechanisms, one for each case — see below |
+
+This was originally listed as a residual risk worth designing but not necessarily shipping. It shipped, because once the device key pair from §4.3 exists the rest is about forty lines.
+
+**Devices you have met before.** A peer proves possession of its key by signing a challenge — and what it signs includes **its own DTLS fingerprint**:
+
+```
+signature over: prefix | verifier's nonce | verifier's key | prover's key | prover's fingerprint
+```
+
+The fingerprint is the load-bearing part. A signature over the nonce alone proves the peer holds its key, which a relay in the middle can pass along unchanged. Binding it to the fingerprint means the verifier checks it against the fingerprint **it actually received** — and a relay, presenting its own encryption to each side, cannot make those agree. A mismatch is reported distinctly from "unverified", because "this key is bound to a different connection" is a different statement from "there was no key to check".
+
+Without this, a public-key device identity is decoration: an identifier anybody could copy, proving nothing.
+
+**First contact**, where there is no remembered key to check against, falls back to two humans comparing a number. A short code derived from both DTLS fingerprints, sorted so both ends compute the same one. Anything sitting in the middle makes the two devices show different codes.
 
 ### 7.3 Enforcing the local-only promise
 
@@ -283,29 +321,43 @@ Things that will break in the field, ordered by how often you'll hit them:
 
 | Concern | Choice | Why |
 |---|---|---|
-| Build | **Vite + TypeScript** | Fast, minimal config, first-class PWA plugin |
-| UI | **Svelte** | Small bundle matters on a phone opening a cold URL; less ceremony than React. *Tradeoff: React has a wider contributor pool for an open-source project — reconsider if community contribution is a priority.* |
-| PWA | `vite-plugin-pwa` (Workbox) | Offline app shell, installable |
-| Signaling | **Node + `ws`** | ~300 lines, trivially self-hostable. *Cloudflare Durable Objects is a strong alternative for room state, at the cost of self-hosting simplicity.* |
-| QR | `qrcode` to generate; native `BarcodeDetector` with `jsQR` fallback (Safari lacks it) | |
-| Tests | Vitest (unit) + Playwright (two browser contexts, real DataChannel) | Playwright can drive both peers in one test |
+| Build | **None.** ES modules served directly | *Changed from Vite + TypeScript.* See below |
+| UI | **Plain DOM**, one small render module | *Changed from Svelte.* See below |
+| PWA | Hand-written service worker | It has a second job anyway — the streaming-download receive tier (§6, tier 3) — and that is not something a generated Workbox config expresses |
+| Signaling | **Node + `ws`** | ~450 lines across five files, trivially self-hostable. *Cloudflare Durable Objects is a strong alternative for room state, at the cost of self-hosting simplicity.* |
+| QR | **Encoder written from scratch**; native `BarcodeDetector` for scanning, no fallback | See below |
+| Tests | Three layers, no framework: unit, signalling integration over a real WebSocket, and end-to-end driving a headless browser over the DevTools Protocol | See §14.2 |
 | Hosting | Static host + one small always-on process for signaling | |
 
-Licence: **AGPL-3.0** or **MIT** — decide early. AGPL keeps hosted forks open; MIT maximizes adoption. This affects contributors, so settle it before the first PR.
+**Why no build step.** §9 originally specified Vite, TypeScript and Svelte, and the stated reason for Svelte was that bundle size matters on a phone opening a cold URL. Taken seriously, that argument goes one step further: no framework and no bundler is smaller than any bundle, and the app is a device list, a transfer list and a settings dialog — there is no state-synchronisation problem here that a framework solves. What was given up is real and worth naming: no type checking on the wire protocol, which is exactly where §14.3's most expensive bug lived. The mitigation is that every message is validated into a known shape at one boundary, and that the validators are tested.
+
+The second reason is the development loop. Testing this app means real devices on real Wi-Fi, repeatedly, and a build step sits between every edit and every retest.
+
+**Why the QR encoder is hand-written.** Using `qrcode` from npm would mean either a bundler or vendoring third-party source into the repo. The encoder is about 300 lines, the specification is unambiguous, and — the deciding factor — it can be *verified*: an independently written decoder reads the output back and confirms the payload survives. A QR encoder has no useful middle ground between working and producing a picture that quietly will not scan, so a test that reads it back is worth more than a dependency.
+
+**Why no QR decoder.** Scanning uses `BarcodeDetector` where it exists and typing the five characters everywhere else. Writing a decoder is a far larger problem than an encoder — perspective correction, thresholding, error correction — and iOS does not need it: the system camera scans a QR and opens the link, which is the same journey with fewer steps. Displaying the QR is what has to work everywhere, and that is the encoder's job.
+
+Licence: **MIT**. Decided — see §13.
 
 ---
 
 ## 10. Roadmap
 
-| Milestone | Deliverable | Why this order |
+| Milestone | Deliverable | Status |
 |---|---|---|
-| **M0** | This document | |
-| **M1** | Proof of concept: two browsers, hardcoded room, one file over the LAN | Validates WebRTC on *your* actual hardware and network before any investment in structure |
-| **M2** | Signaling server; **QR + room code as the primary path**; auto-IP grouping as a bonus that may fail | Automatic discovery cannot carry the product: public-IP grouping breaks under IPv6, carrier NAT, VPNs and reverse proxies. A code the user can read aloud always works |
-| **M3** | Robust transfer: negotiated chunk size, backpressure, OPFS receive, **resume**, progress, cancel, multi-file | The engineering core. Resume belongs here rather than later — a long transfer that drops and *can* resume is an annoyance; one that silently starts over is a reason to stop using the tool |
-| **M4** | PWA, device names, accept prompts, local-path badge, **diagnostics panel** | A failure the user cannot explain is indistinguishable from a broken product, and the ICE data needed to explain it is already in hand |
-| **M5** | One-to-many broadcast (classroom mode) | The feature differentiator — see below |
-| **M6** | Folder transfer, self-hosting Compose file + `/health` self-check | A misconfigured proxy breaks discovery while everything else looks fine; a self-check turns that from a mystery into a message |
+| **M0** | This document | Done |
+| **M1** | Proof of concept: two browsers, hardcoded room, one file over the LAN | Done — §14 |
+| **M2** | Signaling server; **QR + room code as the primary path**; auto-IP grouping as a bonus that may fail | **Done** — §14.2 |
+| **M3** | Robust transfer: negotiated chunk size, backpressure, OPFS receive, **resume**, progress, cancel, multi-file | **Done**, except resume across a page reload — §14.2 |
+| **M4** | PWA, device names, accept prompts, local-path badge, **diagnostics panel** | **Done** — §14.2 |
+| **M5** | One-to-many broadcast (classroom mode) | Not started — see below |
+| **M6** | Folder transfer, self-hosting Compose file + `/health` self-check | `/health` shipped early with M2, because a deployment needs something to point at. The rest not started |
+
+The order held up. Two things are worth recording about *why*:
+
+M2 before M3 was right for a reason that only became visible in testing: room codes are what let two devices be put in the same room *on purpose*, which is a precondition for testing anything else repeatedly. Automatic grouping cannot be pointed at a specific pair.
+
+M4 was not the cosmetic milestone it looks like in this table. The diagnostics work is what found three of the four defects in §14.3 — a panel that reports why something failed also reports when your own code is the reason.
 
 ### M5 — classroom broadcast, in more detail
 
@@ -352,25 +404,34 @@ Also on Windows: the first `vite --host` will trigger a Windows Firewall prompt.
 | No TURN by default | TURN for reliability | TURN routes file data through a server. Reliability is not worth silently breaking the promise |
 | OPFS (Tier 2) before `showSaveFilePicker` (Tier 1) | Desktop-first | Mobile is the harder constraint and the primary use case. Build for the hard case first |
 | No accounts | Optional sign-in for device memory | Accounts imply a database, which implies liability. Public-key device identity gets the same result |
+| **No build step** — ES modules served directly | Vite + TypeScript + Svelte, as §9 originally specified | The stated reason for Svelte was bundle size on a phone opening a cold URL; no bundle is smaller than a small one, and there is no state-synchronisation problem here that a framework solves. Also removes a build from every real-device retest — which is the loop that actually finds bugs in this project. Cost: no type checking on the wire protocol, mitigated by validating every message at one boundary and testing those validators |
+| **Both peers may open a DataChannel** | Arbitrating a single shared channel | Two simultaneous sends produce two channels rather than a conflict, and a transfer binds to the channel it started on. Markedly less machinery than electing one, and glare in the *signalling* is already handled by perfect negotiation |
+| **Progress reported by the receiver** | Sender-side progress from `bufferedAmount` | The sender only knows what it queued. M1 shipped the optimistic version and it overstated progress; the number the user watches should be the one that is true |
+| **Checksums on by default** | Off by default, as §5.2 proposed | The objection was cost. Neither end pays it if neither hashes on the thread doing the work — see §13.3 |
 
 ---
 
 ## 13. Open questions
 
-1. **Licence** — AGPL vs MIT. Blocks the first external contribution.
-2. **Maximum supported file size**, per platform tier — needs measurement on real devices during M1/M3, then a documented limit rather than a mystery failure.
-3. **Integrity checking** — default on or off? Depends on measured CRC32 throughput on a mid-range phone.
-4. **Name and domain.**
+1. ~~**Licence**~~ — **resolved: MIT.** Maximum adoption, and the value of this project is that it works everywhere rather than that nobody forks it.
+2. **Maximum supported file size**, per platform tier — still open, and now the *right* kind of open: the app reports which tier a device landed on and refuses a transfer it cannot fit, so the failure is a message rather than a mystery. What is missing is the measured number per platform.
+3. ~~**Integrity checking** — default on or off?~~ — **resolved: on.** The question assumed hashing has to cost throughput. It does not, if neither end hashes on the thread doing the work: the sender's worker reads the file itself rather than being handed copies, and the receiver folds it in inside the storage worker on bytes already in hand.
+4. **Name and domain.** Still open.
 5. **Does M5's bounded-parallelism queue actually hold up** with 30 devices on one access point? Unknown until tested with real hardware; may force the swarm design earlier than planned.
 6. **Signaling server abuse at scale** — if this gets popular, what does hosting cost and how is it funded without ads or accounts?
+7. **New: is the receiver's storage the throughput ceiling on real hardware?** §14.4 shows it costs roughly two thirds of receive time in a loopback measurement, which is suggestive and not conclusive. The measurement to run is in §14.4.
 
 ---
 
-## 14. M1 measured results
+## 14. Measured results
 
 First real run: **Windows 11 / Edge** ↔ **Android Chrome**, same Wi-Fi, 2026-07-26.
 
-### What worked
+### 14.0 M1 — first real run
+
+Windows 11 / Edge to Android Chrome, same Wi-Fi, 2026-07-26.
+
+#### What worked
 
 | Check | Result |
 |---|---|
@@ -382,13 +443,13 @@ First real run: **Windows 11 / Edge** ↔ **Android Chrome**, same Wi-Fi, 2026-0
 
 The central premise is proven: **a browser-to-browser transfer whose data path never leaves the local network works, and the app can prove it did.**
 
-### Finding 1 — Tier 1 is available on Android Chrome
+#### Finding 1 — Tier 1 is available on Android Chrome
 
 §6 originally claimed `showSaveFilePicker()` was Chromium-desktop-only. Measured: Android Chrome reported it **available**, and the phone received via `disk (File System Access)`, not OPFS. The table above is corrected.
 
 This is good news, and it narrows the problem: the storage-tier risk is now **specifically an iOS Safari problem**, not a mobile problem. Untested — no iPhone in this run.
 
-### Finding 2 — throughput is bad: ~2 MB/s
+#### Finding 2 — throughput is bad: ~2 MB/s
 
 A 1.2 GB file moved PC → Android at **2.0 MB/s** (receiver measured 1.9 MB/s). Expected range was 10–50 MB/s. At this rate that file needs ~10 minutes, which is not shippable.
 
@@ -403,13 +464,13 @@ Unresolved. Candidate causes, roughly in order of suspicion:
 
 Do not optimise before this measurement. Tuning the wrong layer is how a performance bug becomes permanent.
 
-### Finding 3 — connection failed in one direction
+#### Finding 3 — connection failed in one direction
 
 Android → PC failed to connect while PC → Android succeeded moments later, same devices, same network. Not diagnosed; the failure message was too vague to distinguish "the other side never replied" from "every route was tried and failed" — fixed since (§14.1).
 
 Whether this is a genuine directional asymmetry or ordinary first-attempt flakiness is unknown. Needs repeat runs in both directions.
 
-### 14.1 Fixes made after the run
+### 14.1 Fixes made after the M1 run
 
 Three defects the run exposed:
 
@@ -417,12 +478,90 @@ Three defects the run exposed:
 - **Status text never advanced past "Waiting to accept."** A transfer showed 58 MB / 1.2 GB moving at 2.0 MB/s while still claiming it was waiting for permission.
 - **Failure diagnosis conflated three distinct causes.** "No candidates at all" was reported when the real situation was "no pair was formed." Now separated into no-local-candidates (VPN), no-remote-candidates (other side never replied), no-pair (stalled handshake), and all-pairs-failed (client isolation).
 
-### 14.2 Still untested
+### 14.2 M2–M4 results
 
-- **Any Apple device.** iPhone ↔ Windows is a headline use case and remains entirely unverified.
+Built and verified: room codes and QR, negotiated chunk sizes, real backpressure, flow control, the OPFS worker receive path, resume, cancel, multi-file, the PWA, device verification, and the diagnostics panel.
+
+**Verified how.** Three test layers, because they catch different things:
+
+| Layer | Count | What it can prove |
+|---|---|---|
+| Unit | 45 | The QR encoder round-trips through an independently written decoder at every version and error level. Room-code folding, filename hygiene, CRC-32 against the standard check value, room membership and caps |
+| Signalling integration, over a real WebSocket | 19 | Automatic grouping, codes beating addresses, rate limits, and that the relay will not carry a message to a peer outside the sender's room |
+| End-to-end, two tabs in a headless browser | 24 | A file dropped on a device row, accepted on the other side, arriving intact over a route both ends report as local |
+
+The end-to-end layer drives the interface a person uses — a drop event and a tap on Accept — with no test hooks in the app, so nothing can pass because of a back door. It is worth the trouble: **it found four defects that no amount of reading found**, and three of them were invisible from the outside (§14.3).
+
+What the automated layer still cannot reach: any Apple device, Firefox, a hostile network, and real Wi-Fi throughput.
+
+### 14.3 Defects found after the fact
+
+Four came out of the end-to-end test. The rest came from a review pass afterwards
+and share a family resemblance worth naming: **every one was a slow leak or a
+silent stall, not a crash.** A test suite that only checks for thrown errors would
+have passed all of them.
+
+| Defect | Symptom it would have produced |
+|---|---|
+| A save link minted a fresh `URL.createObjectURL` on every render | One leaked object URL per repaint, each pinning an entire received file in storage |
+| The backpressure wait attached a `close` listener per chunk | Thousands of listeners over a large file, and an unhandled rejection when the channel later closed normally |
+| Deleting the OPFS file when the user clicked **Save** | A download truncated by tidying up, on exactly the tier that handles the largest files |
+| `flow` pause replaced a live gate instead of being idempotent | A sender waiting on an orphaned promise, stalled with nothing to wake it |
+| The OPFS worker's open request had no timeout | A hang instead of the fallback to async writes, on any platform where the worker stays silent |
+| Remote cancel left the channel's active entry in place | In-flight chunks written to a writer that had already been torn down |
+| The room device count came from the join response | "Waiting for someone to join" while somebody was standing there |
+| Resume could be triggered twice concurrently | The same file sent twice from two different offsets |
+
+#### The four the end-to-end test found
+
+Recorded because the *shape* of each one is more instructive than the fix.
+
+**1. A validator silently dropped `file-start`.** The chunk-size field was checked with a predicate written for counts, capped at 10,000. The negotiated chunk size is 248,832 bytes, so every `file-start` failed validation and was discarded. The receiver never opened a writer; chunks arrived and were dropped as strays; the sender reported a completed transfer at full speed while the receiver sat at 0 bytes indefinitely.
+
+The bug is unremarkable. What matters is that **the failure was completely silent** — the one thing the design says most clearly must not happen (§ "failures that explain themselves"), happening inside the code meant to prevent it. Rejecting a peer's malformed message and dropping our own valid one look identical when neither is reported. Now an unparseable control message is logged where the diagnostics panel shows it, which would have turned an hour into a minute.
+
+**2. Rendering was tied to `requestAnimationFrame`, so a background tab stopped updating.** A hidden tab gets no frames at all — not delayed, suspended. The device list, transfer progress and diagnostics simply froze while the underlying state stayed perfectly correct. On a phone that locks its screen mid-transfer, that is the normal case. Renderers are now coalesced on a timer, which is throttled in the background but still runs.
+
+**3. The per-IP socket limit contradicted automatic discovery.** Set to 12, tuned as though one address meant one device. But every device behind one router shares a public address — that is the entire premise of §4.1 — so a classroom of thirty is thirty sockets from one IP, and eighteen of them would have been refused with an error that reads like the server being down. The limit now sits above the room caps, and a test asserts that ordering so it cannot silently regress.
+
+**4. `createSyncAccessHandle` is undetectable from the main thread.** Measured: the method is not on `FileSystemFileHandle.prototype` in a browser where it works perfectly inside a worker. The feature test reported "no" and every receive quietly took the slower async path — a performance regression with no symptom. The app now *asks a worker* once, and until the answer arrives it attempts the fast path and falls back. §6's claim that this is worker-only is stronger than it first appears: it is not merely unavailable on the main thread, it is invisible from there.
+
+The common thread in 1, 2 and 4: each was a silent degradation, not a crash. A test that only checks for errors would have passed all three.
+
+### 14.4 Throughput: the measurement §14 asked for
+
+§14 (M1) recorded 2.0 MB/s and listed four candidate causes, with the instruction not to optimise before running the experiment that separates them. That experiment — a discard mode on the receiver that counts bytes without writing them — is now built, and the end-to-end test runs it automatically as an A/B on the same payload.
+
+Loopback, two tabs in one headless browser, 6 MB, same run:
+
+| Receiver | Throughput |
+|---|---|
+| Writing to OPFS via the synchronous worker | ~1.1 MB/s |
+| Discarding (storage removed from the path) | ~3.9 MB/s |
+
+**Storage accounts for roughly two thirds of receive time.** That supports cause 1 from §14 — serialised receive-side writes — and it is the first evidence for it rather than a suspicion.
+
+Two honest caveats, both important:
+
+- **This is not a measurement of anything real.** Two tabs in one browser on one machine share a CPU with both checksum workers and both ends of the transfer. The absolute numbers say nothing about real hardware and should not be quoted as if they did.
+- **But the comparison is valid**, because exactly one thing changed between the two rows. That is the whole reason the discard tier exists.
+
+Also fixed structurally, on the reasoning that these were design defects rather than optimisations:
+
+- The source file is read as a **stream** rather than one `slice().arrayBuffer()` per chunk. A 1.2 GB file needed roughly 4,800 async round trips through the file system; now the browser reads ahead at its own pace and the send loop hands out fixed-size messages. This was cause 3.
+- Writes **overlap** instead of being awaited one at a time, with a byte cap so a slow disk cannot become unbounded memory. Awaiting each write in turn makes storage latency and network throughput multiply rather than overlap.
+- Checksums moved off both hot threads entirely, which removes cause 4 from the picture instead of trading it against verification.
+
+**Still to run, and it is the measurement that matters:** the same A/B on real hardware over real Wi-Fi, preceded by a plain LAN speed test between the same two devices to bound what is achievable. Cause 2 — that the link itself was simply slow — has still not been ruled out, and the loopback figures cannot rule it out. The next lever after that, if storage is confirmed as the limit, is moving the File System Access writes into a worker as well; it is deliberately not done yet, because §14 is right that tuning the wrong layer is how a performance bug becomes permanent.
+
+### 14.5 Still untested
+
+- **Any Apple device.** iPhone ↔ Windows is a headline use case and remains entirely unverified. The OPFS worker path exists specifically for it and has only ever run on Chromium.
 - **Firefox**, on either end.
-- **A hostile network** — client isolation (§8.1) has not been provoked on purpose.
-- **Resume**, which does not exist yet.
+- **A hostile network** — client isolation (§8.1) has not been provoked on purpose, so the code that explains it has never had to.
+- **Resume across a page reload.** Resume works while the tab stays open; a closed tab discards the partial file.
+- **The service-worker download tier**, which only engages where there is neither a save dialog nor OPFS.
+- **Real-hardware throughput** (§14.4).
 
 ---
 
@@ -441,4 +580,11 @@ None of these are new features. They are reliability, and reliability is the who
 
 ## Provenance
 
-Every line of `server.js` and `public/index.html` is original work, written from scratch for this project. RoomBeam incorporates no third-party source, and its only runtime dependencies are `ws` and `selfsigned` (both declared in `package.json`).
+Every line of this project is original work, written from scratch for it. RoomBeam incorporates no third-party source, and its only runtime dependencies are `ws` and `selfsigned` — both server-side, both declared in `package.json`. **The browser loads no dependency at all**, which is also what makes the content-security policy in §7 enforceable: the page cannot reach a third party even if a future edit tried to.
+
+Written from scratch rather than taken from a library, in each case for a stated reason:
+
+- the **QR encoder** (§9), so that no bundler or vendored source is needed, and because it can be verified by reading its own output back;
+- the **service worker**, which has a second job — the streaming-download receive tier — that a generated config does not express;
+- the **PNG icon generator**, so an installable app does not require a toolchain to produce its own icons;
+- the **test harnesses**, including a DevTools Protocol client small enough to be read in one sitting.

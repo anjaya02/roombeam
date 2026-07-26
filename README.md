@@ -1,8 +1,16 @@
-# RoomBeam — M1 proof of concept
+# RoomBeam
 
 **Files, straight across.**
 
-Browser-to-browser file transfer over the local network. See [DESIGN.md](DESIGN.md) for the full plan; this is milestone M1, which exists to **measure** rather than to ship.
+Open a URL on two devices. They see each other. Pick a file, it transfers. The file
+data travels device-to-device over your local network and never touches a server —
+and the app inspects its own connection and tells you whether it actually did.
+
+No install. No account. No cloud storage. Works between a Mac and a Windows PC, or
+an iPhone and a Windows PC, which have no built-in way to do this at all.
+
+- **[GUIDE.md](GUIDE.md)** — how to use it, and what to do when it does not work.
+- **[DESIGN.md](DESIGN.md)** — the architecture, the reasoning, and what has actually been measured.
 
 ## Run it
 
@@ -11,83 +19,191 @@ npm install
 npm start
 ```
 
-The first run generates a self-signed certificate into `certs/`. The console prints two URLs:
+The console prints two URLs:
 
 ```
 This computer:   https://localhost:8443
 Other devices:   https://192.168.8.150:8443
 ```
 
-Open the first on this PC, the second on your phone. **Both devices must be on the same Wi-Fi.**
+Open the first on this machine and the second on your phone, or create a room code
+and scan the QR. **Both devices need to be on the same Wi-Fi** for the transfer to
+stay local.
 
 ### The certificate warning is expected
 
-Every device will refuse the page once, because the certificate is self-signed:
+Every device objects once, because the certificate is generated on first run and
+signed by nobody:
 
 | Device | What to tap |
 |---|---|
-| iOS Safari | **Show Details** → **visit this website** → **Visit Website** |
+| iOS / macOS Safari | **Show Details** → **visit this website** |
 | Android Chrome | **Advanced** → **Proceed to … (unsafe)** |
-| Desktop Chrome/Edge | **Advanced** → **Proceed** |
+| Desktop Chrome / Edge | **Advanced** → **Proceed** |
 
-This is unavoidable at this stage and it is *why* HTTPS is here at all: **WebRTC refuses to run outside a secure context, and a LAN IP is not a secure context.** Plain HTTP would fail with a confusing error instead of an honest warning. M2 replaces this with a proper hosted origin.
+This is *why* HTTPS is here: **WebRTC refuses to run outside a secure context, and a
+LAN IP is not one.** Plain HTTP would fail with "RTCPeerConnection is not defined"
+and no hint as to why. An honest warning beats a silent missing feature.
 
-### If the phone can't reach the page
+### If the phone cannot reach the page
 
-Windows Firewall blocks the inbound connection by default. In an **Administrator** PowerShell:
+Windows Firewall blocks the inbound connection by default. In an **Administrator**
+PowerShell:
 
 ```powershell
-New-NetFirewallRule -DisplayName "RoomBeam M1" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "RoomBeam" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow -Profile Private
 ```
 
-Still nothing? The server prints every network interface it found — if your Wi-Fi adapter isn't the first one listed, try the others. VPNs and virtual adapters (VirtualBox, WSL, Hyper-V) are the usual culprits.
+Still nothing? The server prints every interface it found, ranked. If your Wi-Fi
+adapter is not the one listed first, try the others — VPNs and virtual adapters
+(VirtualBox, WSL, Hyper-V) are the usual culprits.
 
 ## Using it
 
-1. Both devices show up in each other's **Devices on this network** list.
-2. Tap a device → pick a file.
-3. The receiving device shows an **Accept / Decline** prompt.
-4. On accept, the transfer runs. Both sides show live progress and throughput.
+**Two ways to find each other, because each one fails where the other works.**
 
-## What to record
+- **Automatically.** Devices sharing a public IP address are grouped without being
+  asked. Nothing to type. Breaks on cellular, on a VPN, behind carrier-grade NAT,
+  and on networks with several egress addresses.
+- **With a room code.** A five-character code and a QR. Works across networks, on
+  guest Wi-Fi, and behind any NAT — and it is the better experience anyway when a
+  teacher can put the QR on a projector.
 
-M1's job is to answer five questions on *your* hardware. Every answer is on screen — no dev tools needed.
+Then: tap a device (or drag files onto it), and the other device gets an
+**Accept / Decline** prompt. Nothing is ever accepted automatically — on shared
+Wi-Fi that prompt is the only thing between you and files from a stranger.
 
-| # | Question | Where to look |
-|---|---|---|
-| 1 | Does the connection establish at all? | Devices appear, transfer starts |
-| 2 | **Did the bytes stay local?** | Note under a completed transfer: `local network` (good), `internet route`, or `relayed through a server` (bad) |
-| 3 | What throughput do you get? | MB/s, live and on completion |
-| 4 | Did the file arrive intact? | `checksum verified` on the receiving side |
-| 5 | **Which storage tier does each device use?** | `via disk (File System Access)` / `via OPFS stream` / `via memory` |
+## What it tells you
 
-Question 5 is the important one. It decides the maximum practical file size per platform: the memory tier holds the whole file in RAM, which is what makes large receives fail on iOS. The **Diagnostics** panel at the bottom of the page reports each device's capabilities independently.
+Everything below is on screen. No developer tools needed.
 
-### Worth testing deliberately
+| | Where |
+|---|---|
+| **Did the bytes stay local?** | Under each transfer, and on each device row: `local network`, `internet route`, or `relayed through a server` |
+| Throughput | Live, and on completion. The receiver's number is the true one |
+| Did the file arrive intact? | `checksum verified` |
+| Where a received file went | `via disk (File System Access)`, `via OPFS…`, `via memory` — this sets the maximum file size the device can handle |
+| Is this the device I sent to last time? | A `verified` badge, which means the peer signed a challenge with the key you saw before **and** that key is bound to this connection's encryption |
+| Why a connection failed | Four separate diagnoses, because "no local routes", "the other side never replied", "a stalled handshake" and "this network blocks device-to-device traffic" have nothing in common as fixes |
 
-- **A large file** (500 MB+) from **phone → PC**. Most likely to expose a backpressure problem — the failure mode is a transfer that dies partway with no error.
-- **Both directions** with the same file. A direction-dependent slowdown is easy to miss and only shows up if you test both.
-- **iPhone as receiver**, if you have one. That's the platform with the least headroom.
-- **A hostile network** — school or café Wi-Fi. Expect failure, and check the app *explains* it instead of hanging.
+The **Diagnostics** panel adds each device's capabilities, per-connection ICE
+detail, and a **throughput ceiling** measurement that moves data between two
+connections inside the page — no network involved — so a slow transfer can be
+blamed on the right thing.
 
-## What M1 deliberately does not do
+## Settings worth knowing
 
-Known and intentional; not bugs to report:
+- **Local network only** — refuse to send unless the selected route is local.
+  Turns the privacy claim from something reported into something enforced.
+- **Use a STUN server** — only needed when the two devices are *not* on the same
+  network. Off is the strictest posture: local addresses only, nothing asked of
+  anyone else.
+- **Verify every file** — on by default. Both ends checksum on separate threads,
+  so it costs no throughput.
+- **Discard received files** — a measurement tool. Count the bytes and throw them
+  away; if the rate jumps, storage was the bottleneck rather than the network.
 
-- **One global room.** Everyone connected sees everyone else. Room codes and QR are M2.
-- **No resume.** A dropped connection loses the transfer. M3.
-- **Memory tier on Safari.** M1 tries `createWritable()` on OPFS and falls back to RAM if absent. If Safari lands on the memory tier, that is the finding — M3 adds the Worker + `createSyncAccessHandle` path that fixes it. Measure first, then build.
-- **No glare handling.** Both devices sending to each other at the exact same moment will misbehave.
-- **Sender progress is optimistic.** It shows bytes queued, not bytes confirmed received. The receiver's number is the true one.
-- Renaming your device reloads the page.
+## Tests
+
+```powershell
+npm run check        # everything
+npm run check:unit   # no browser needed
+npm run check:e2e    # drives a headless Chromium
+```
+
+Three layers:
+
+- **45 unit checks.** The QR encoder is the interesting one — it is verified by an
+  independently written decoder that reads the format information back, unmasks,
+  de-interleaves the blocks, confirms every Reed–Solomon syndrome is zero and
+  recovers the payload, at every version and error level. A QR encoder otherwise
+  either works or produces a picture that quietly will not scan.
+- **19 signalling integration checks** over a real WebSocket: automatic grouping,
+  room codes, rate limits, and that the relay will not carry a message to a peer
+  outside the sender's room.
+- **24 end-to-end checks** driving a headless browser: two tabs discover each
+  other, a file is dropped onto a device row, accepted on the other side, and both
+  ends confirm it arrived intact over a verified local route. It goes through the
+  interface a person uses — a drop event and a tap on Accept — so nothing can pass
+  because of a test hook.
+
+`npm run check:e2e` skips itself if no Chromium-based browser is installed.
 
 ## Layout
 
 ```
-server.js            HTTPS static server + WebSocket signalling relay (~200 lines)
-public/index.html    the entire client — UI, WebRTC, chunking, storage tiers
-certs/               generated on first run; do not commit
-DESIGN.md            architecture, design rationale, measured results, roadmap
+server.js              entry point: TLS or plain HTTP behind a proxy
+src/
+  http.js              static files, /health, security headers
+  signaling.js         WebSocket relay, rate limits, room membership
+  rooms.js             room registry: codes and salted IP grouping
+  cert.js              self-signed certificate, regenerated when the LAN moves
+  interfaces.js        which address to tell the user about
+public/
+  index.html           the app shell
+  app.css
+  sw.js                offline shell, and the streaming-download receive tier
+  shared/              modules the server and browser must agree on exactly
+  js/
+    main.js            wiring
+    signaling.js       client half of the relay
+    peer.js            perfect negotiation, device proof, route inspection
+    protocol.js        the DataChannel wire protocol and its validators
+    transfer.js        chunking, backpressure, flow control, resume, cancel
+    writers.js         the receive-side storage tiers
+    opfs-worker.js     synchronous writes, the large-file path on iOS
+    crc-worker.js      checksums off the send loop's thread
+    qr.js              QR encoder, written from scratch
+    diagnostics.js     capabilities, ICE detail, throughput ceiling
+tools/
+  check*.mjs           the three test layers
+  make-icons.mjs       PNG icons, generated
 ```
 
-The signalling server never sees file data. Its only job is to let two browsers exchange the connection details they need, because **a browser cannot discover devices on a local network** — no mDNS, no UDP broadcast, no raw sockets. That constraint is the reason this component exists at all.
+## Self-hosting
+
+The signalling server holds no database and writes nothing to disk. Room state is
+in memory and gone on restart — which is safe, because once a DataChannel is open
+the server is no longer in the path.
+
+```
+PORT=8443              listening port
+HOST=0.0.0.0           bind address
+ROOMBEAM_TLS=off       skip the generated certificate; something else terminates TLS
+TRUST_PROXY=1          read X-Forwarded-For for the automatic grouping
+```
+
+`GET /health` returns live room and peer counts. Point a deploy check at it: a
+reverse proxy that forwards HTTP but not the WebSocket upgrade breaks discovery
+while the page itself loads perfectly, which is otherwise a baffling way to be
+broken.
+
+## What is not built yet
+
+Honest gaps, not bugs to report:
+
+- **One-to-many broadcast** (M5) and **folder transfer** (M6).
+- **Resume across a page reload.** Resume works while the tab stays open — a
+  dropped connection reconnects and picks up from the receiver's byte count. Close
+  the tab and the partial file is discarded.
+- **In-app QR scanning on Safari**, which has no `BarcodeDetector`. The system
+  camera scans the QR and opens the link, so the code is typed or the camera app
+  is used.
+
+## Untested
+
+Stated plainly because "untested" and "working" are easy to confuse:
+
+- **Any Apple device.** iPhone ↔ Windows is a headline use case and remains
+  entirely unverified. The OPFS worker path exists specifically for it.
+- **Firefox**, on either end.
+- **A hostile network.** Client isolation has not been provoked on purpose; the
+  code that explains it has never had to.
+- **The service-worker download tier**, which only engages on a browser with no
+  save dialog and no OPFS.
+- **Real-hardware throughput.** The only measurements so far are two tabs in one
+  headless browser on one machine — see DESIGN.md §14.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
