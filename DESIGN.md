@@ -309,7 +309,7 @@ Licence: **AGPL-3.0** or **MIT** — decide early. AGPL keeps hosted forks open;
 
 ### M5 — classroom broadcast, in more detail
 
-Existing tools are built around 1:1. One person sending one file to thirty is a distinct and underserved problem, and it's the use case you described.
+One person sending one file to thirty is a fundamentally different problem from a 1:1 send, not a loop around it — and it is the motivating use case for RoomBeam: a classroom, a workshop, a meeting where everyone needs the same handout.
 
 Naive approach: N parallel DataChannels from the sender. 30 receivers × 50 MB = 1.5 GB of upload from one laptop, and thirty simultaneous streams will collapse Wi-Fi throughput through contention. Mitigation: a queue with bounded parallelism (~4 concurrent) rather than a fan-out.
 
@@ -439,11 +439,6 @@ None of these are new features. They are reliability, and reliability is the who
 
 ---
 
-## Related projects
+## Provenance
 
-Other tools in this space, worth knowing before writing code — partly to avoid re-deriving solved problems, partly because their protocol choices are instructive:
-
-- **[LocalSend](https://github.com/localsend/localsend)** — native, Flutter, genuinely offline with real mDNS discovery. What you'd build if you weren't constrained to a browser, and a good illustration of exactly what the sandbox costs you.
-- **[PairDrop](https://github.com/schlagmichdoch/PairDrop)** and **[Snapdrop](https://github.com/RobinLinus/snapdrop)** — the closest existing browser-based approach: WebRTC, public-IP peer grouping, room codes.
-
-**RoomBeam shares no code with any of them.** `server.js` and `public/index.html` were written from scratch. This is worth stating precisely because several of these projects are GPL-family licensed, and derived code would bind this project to those terms — it does not, because there is none.
+Every line of `server.js` and `public/index.html` is original work, written from scratch for this project. RoomBeam incorporates no third-party source, and its only runtime dependencies are `ws` and `selfsigned` (both declared in `package.json`).
