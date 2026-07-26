@@ -1,0 +1,27 @@
+{
+  "name": "roombeam",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Files, straight across. Cross-platform local file transfer in the browser — no installs, no accounts, no cloud.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "selfsigned": "^2.4.1",
+    "ws": "^8.18.0"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "file-transfer",
+    "webrtc",
+    "local-network",
+    "p2p",
+    "airdrop",
+    "pwa"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anjaya02/roombeam.git"
+  }
+}

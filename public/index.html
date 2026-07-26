@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>RoomBeam — M1</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #16181d; --muted: #6b7280; --line: #e4e6eb;
+    --card: #f7f8fa; --accent: #2563eb; --ok: #047857; --warn: #b45309; --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1015; --fg: #e8eaed; --muted: #9aa1ac; --line: #262a33;
+      --card: #171a21; --accent: #5b8cff; --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.25rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 46rem; margin-inline: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 1.15rem; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+       color: var(--muted); margin: 1.75rem 0 0.6rem; font-weight: 600; }
+  header { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+           padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--bad); }
+  #me { margin-left: auto; font-size: 0.85rem; color: var(--muted); }
+  #me input {
+    font: inherit; color: var(--fg); background: transparent;
+    border: 1px solid var(--line); border-radius: 6px; padding: 0.2rem 0.45rem;
+    width: 9rem;
+  }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  #peers { display: grid; gap: 0.5rem; }
+  .peer {
+    display: flex; align-items: center; gap: 0.75rem; width: 100%;
+    padding: 0.9rem 1rem; font: inherit; color: inherit; text-align: left;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .peer:hover { border-color: var(--accent); }
+  .peer:active { transform: scale(0.995); }
+  .peer .nm { font-weight: 550; }
+  .peer .sub { font-size: 0.8rem; color: var(--muted); }
+  .peer .send { margin-left: auto; font-size: 0.8rem; color: var(--accent); }
+  .empty { padding: 1.5rem 1rem; text-align: center; color: var(--muted); font-size: 0.9rem; }
+  .row { padding: 0.85rem 1rem; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row .top { display: flex; gap: 0.75rem; align-items: baseline; }
+  .row .fn { font-weight: 550; overflow-wrap: anywhere; }
+  .row .meta { margin-left: auto; font-size: 0.8rem; color: var(--muted);
+               white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .bar { height: 5px; background: var(--line); border-radius: 3px; margin-top: 0.55rem; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent);
+             border-radius: 3px; transition: width 0.12s linear; }
+  .note { font-size: 0.8rem; color: var(--muted); margin-top: 0.4rem; }
+  .note.ok { color: var(--ok); } .note.warn { color: var(--warn); } .note.bad { color: var(--bad); }
+  .actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; }
+  button.btn {
+    font: inherit; font-weight: 550; padding: 0.45rem 1rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer;
+  }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  a.dl { display: inline-block; margin-top: 0.55rem; font-weight: 550; color: var(--accent); }
+  dl.caps { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 1rem;
+            margin: 0; padding: 0.9rem 1rem; font-size: 0.84rem; }
+  dl.caps dt { color: var(--muted); }
+  dl.caps dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="status"></span>
+  <h1>RoomBeam</h1>
+  <span id="me">you are <input id="myname" maxlength="40" autocomplete="off" spellcheck="false"></span>
+</header>
+
+<h2>Devices on this network</h2>
+<div id="peers"><div class="card empty">Waiting… open this same page on another device.</div></div>
+
+<h2>Transfers</h2>
+<div id="transfers" class="card"><div class="empty">Nothing yet.</div></div>
+
+<h2>Diagnostics</h2>
+<dl class="caps card" id="caps"></dl>
+
+<input type="file" id="picker" multiple hidden>
+
+<script type="module">
+'use strict';
+
+// ── constants ───────────────────────────────────────────────────────────────
+// Backpressure watermarks. Writing to a DataChannel without checking
+// bufferedAmount buffers the whole file in memory and kills the tab — the
+// most likely cause of transfers that die partway with no error.
+const HIGH_WATER = 8 * 1024 * 1024;
+const LOW_WATER  = 1 * 1024 * 1024;
+
+const $  = (s) => document.querySelector(s);
+const fmtBytes = (n) => {
+  if (n < 1024) return `${n} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+  return `${n.toFixed(n < 10 ? 1 : 0)} ${u[i]}`;
+};
+const fmtRate = (bytes, ms) => ms <= 0 ? '—' : `${(bytes / 1048576 / (ms / 1000)).toFixed(1)} MB/s`;
+
+// ── CRC32, incremental ──────────────────────────────────────────────────────
+// SCTP is already reliable and checksummed, so this is belt-and-braces — but
+// M1 exists to answer "did the bytes actually arrive intact", so we measure it.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf, prev = 0) {
+  let c = ~prev >>> 0;
+  const b = new Uint8Array(buf);
+  for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+  return ~c >>> 0;
+}
+
+// ── filename hygiene ────────────────────────────────────────────────────────
+// A filename from a peer is untrusted input. Path separators enable traversal;
+// bidi override characters let "invoice.txt<RLO>exe.gpj" render as a .jpg.
+function safeName(raw) {
+  return String(raw ?? '')
+    .replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F]/g, '')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/[/\\]/g, '_')
+    .replace(/^\.+/, '_')
+    .trim()
+    .slice(0, 200) || 'received-file';
+}
+
+// ── device name ─────────────────────────────────────────────────────────────
+const ADJ = ['Quiet', 'Brass', 'Amber', 'Swift', 'Copper', 'Violet', 'Iron', 'Clever', 'Tidal', 'Dusty'];
+const NOUN = ['Otter', 'Kettle', 'Falcon', 'Lantern', 'Harbour', 'Cedar', 'Comet', 'Meadow', 'Anchor', 'Sparrow'];
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+
+let myName = localStorage.getItem('roombeam.name') || `${pick(ADJ)} ${pick(NOUN)}`;
+localStorage.setItem('roombeam.name', myName);
+$('#myname').value = myName;
+$('#myname').addEventListener('change', (e) => {
+  myName = e.target.value.trim().slice(0, 40) || myName;
+  e.target.value = myName;
+  localStorage.setItem('roombeam.name', myName);
+  location.reload(); // M1: simplest way to re-announce
+});
+
+// ── state ───────────────────────────────────────────────────────────────────
+let ws, myId = null;
+const peers = new Map(); // id -> { id, name }
+const conns = new Map(); // id -> conn
+let sendTarget = null;
+
+// ── signalling ──────────────────────────────────────────────────────────────
+function connectWS() {
+  ws = new WebSocket(`wss://${location.host}`);
+
+  ws.onopen = () => {
+    $('#status').className = 'dot on';
+    ws.send(JSON.stringify({ type: 'join', name: myName }));
+  };
+
+  ws.onclose = () => {
+    $('#status').className = 'dot off';
+    peers.clear();
+    renderPeers();
+    setTimeout(connectWS, 1500);
+  };
+
+  ws.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'welcome') {
+      myId = m.id;
+      m.peers.forEach((p) => peers.set(p.id, p));
+      renderPeers();
+    } else if (m.type === 'peer-joined') {
+      peers.set(m.peer.id, m.peer);
+      renderPeers();
+    } else if (m.type === 'peer-left') {
+      peers.delete(m.id);
+      // Deliberately do NOT tear down a live connection here. Signalling only
+      // introduces peers; once the DataChannel is open the server is
+      // irrelevant. Mobile browsers drop the WebSocket routinely (backgrounded
+      // tab, screen off), and closing the peer connection on that signal would
+      // abort a transfer that is otherwise perfectly healthy.
+      const c = conns.get(m.id);
+      const busy = c && (c.dc?.readyState === 'open' || c.rx);
+      if (c && !busy) { c.pc.close(); conns.delete(m.id); }
+      renderPeers();
+    } else if (m.type === 'signal') {
+      await onSignal(m.from, m.data);
+    }
+  };
+}
+const signal = (to, data) => ws.send(JSON.stringify({ type: 'signal', to, data }));
+
+// ── peer list ───────────────────────────────────────────────────────────────
+function renderPeers() {
+  const box = $('#peers');
+  box.innerHTML = '';
+  if (!peers.size) {
+    box.innerHTML = '<div class="card empty">Waiting… open this same page on another device.</div>';
+    return;
+  }
+  for (const p of peers.values()) {
+    const b = document.createElement('button');
+    b.className = 'peer';
+    b.innerHTML = `<span><span class="nm"></span><br><span class="sub">${p.id}</span></span>
+                   <span class="send">Send file →</span>`;
+    b.querySelector('.nm').textContent = p.name;
+    b.onclick = () => { sendTarget = p.id; $('#picker').click(); };
+    box.appendChild(b);
+  }
+}
+
+$('#picker').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (!files.length || !sendTarget) return;
+  const to = sendTarget;
+  for (const f of files) await sendFile(to, f); // sequential: parallel streams fight for Wi-Fi
+});
+
+// ── transfer rows ───────────────────────────────────────────────────────────
+let rowSeq = 0;
+function addRow(title, subtitle) {
+  const box = $('#transfers');
+  box.querySelector('.empty')?.remove();
+  const el = document.createElement('div');
+  el.className = 'row';
+  el.id = `r${++rowSeq}`;
+  el.innerHTML = `<div class="top"><span class="fn"></span><span class="meta"></span></div>
+                  <div class="bar"><i></i></div><div class="note"></div>
+                  <div class="actions" hidden></div>`;
+  el.querySelector('.fn').textContent = title;
+  el.querySelector('.note').textContent = subtitle ?? '';
+  box.prepend(el);
+  return {
+    el,
+    progress: (frac) => { el.querySelector('.bar > i').style.width = `${Math.min(1, frac) * 100}%`; },
+    meta: (t) => { el.querySelector('.meta').textContent = t; },
+    note: (t, cls = '') => { const n = el.querySelector('.note'); n.textContent = t; n.className = `note ${cls}`; },
+    actions: (nodes) => {
+      const a = el.querySelector('.actions');
+      a.innerHTML = '';
+      if (!nodes) { a.hidden = true; return; }
+      a.hidden = false;
+      nodes.forEach((n) => a.appendChild(n));
+    },
+  };
+}
+
+// ── WebRTC ──────────────────────────────────────────────────────────────────
+const RTC_CONFIG = {
+  // A single STUN server helps when peers are not actually on the same LAN.
+  // Deliberately no TURN: TURN would route file bytes through a server on the
+  // internet, which is exactly what this project promises not to do.
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+};
+
+function newConn(peerId) {
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  const c = { peerId, pc, dc: null, pending: [], rx: null, offer: null };
+  conns.set(peerId, c);
+
+  pc.onicecandidate = (e) => { if (e.candidate) signal(peerId, { candidate: e.candidate.toJSON() }); };
+  pc.ondatachannel = (e) => wireChannel(c, e.channel);
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed') {
+      diagnoseFailure(c);
+      conns.delete(peerId);
+    }
+  };
+  return c;
+}
+
+function wireChannel(c, dc) {
+  c.dc = dc;
+  dc.binaryType = 'arraybuffer';
+  dc.bufferedAmountLowThreshold = LOW_WATER;
+  dc.onmessage = (e) => onChannelMessage(c, e.data);
+  dc.onclose = () => { if (c.rx) failIncoming(c, 'Connection closed mid-transfer.'); };
+  return dc;
+}
+
+async function onSignal(from, data) {
+  const c = conns.get(from) ?? newConn(from);
+
+  if (data.sdp !== undefined) {
+    await c.pc.setRemoteDescription(data);
+    if (data.type === 'offer') {
+      await c.pc.setLocalDescription(await c.pc.createAnswer());
+      signal(from, c.pc.localDescription.toJSON());
+    }
+    // ICE that arrived before the description was set can now be applied.
+    for (const cand of c.pending.splice(0)) {
+      await c.pc.addIceCandidate(cand).catch(() => {});
+    }
+  } else if (data.candidate) {
+    if (c.pc.remoteDescription) await c.pc.addIceCandidate(data.candidate).catch(() => {});
+    else c.pending.push(data.candidate);
+  }
+}
+
+/** Open (or reuse) a DataChannel to a peer, as the initiating side. */
+async function openChannel(peerId) {
+  let c = conns.get(peerId);
+  if (c?.dc?.readyState === 'open') return c;
+
+  c = c ?? newConn(peerId);
+  if (!c.dc) {
+    wireChannel(c, c.pc.createDataChannel('files', { ordered: true }));
+    await c.pc.setLocalDescription(await c.pc.createOffer());
+    signal(peerId, c.pc.localDescription.toJSON());
+  }
+
+  await new Promise((resolve, reject) => {
+    if (c.dc.readyState === 'open') return resolve();
+    const timer = setTimeout(() => reject(new Error('timeout')), 20000);
+    c.dc.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    c.pc.addEventListener('connectionstatechange', () => {
+      if (c.pc.connectionState === 'failed') { clearTimeout(timer); reject(new Error('failed')); }
+    });
+  });
+  return c;
+}
+
+// ── sending ─────────────────────────────────────────────────────────────────
+async function sendFile(peerId, file) {
+  const row = addRow(file.name, `To ${peers.get(peerId)?.name ?? peerId} · connecting…`);
+  row.meta(fmtBytes(file.size));
+
+  let c;
+  try {
+    c = await openChannel(peerId);
+  } catch {
+    row.note('Could not establish a connection. See Diagnostics below.', 'bad');
+    return;
+  }
+
+  const path = await describePath(c.pc);
+  row.note(`Waiting for ${peers.get(peerId)?.name ?? 'peer'} to accept · ${path.label}`, path.cls);
+
+  // Ask permission before sending a single byte.
+  c.dc.send(JSON.stringify({ t: 'offer', name: file.name, size: file.size, mime: file.type }));
+
+  const verdict = await new Promise((resolve) => { c.awaitVerdict = resolve; });
+  if (verdict !== 'accept') {
+    row.note('Declined by the other device.', 'warn');
+    return;
+  }
+
+  // Respect the negotiated SCTP limit rather than hardcoding a chunk size —
+  // guessing here is a likely cause of the direction-dependent slowness
+  // reported against similar tools.
+  const maxMsg = c.pc.sctp?.maxMessageSize || 65536;
+  const chunkSize = Math.max(16384, Math.min(maxMsg, 262144));
+  c.dc.send(JSON.stringify({ t: 'start', chunkSize }));
+  row.note(`Sending · ${path.label} · ${fmtBytes(chunkSize)} chunks`, path.cls);
+
+  const t0 = performance.now();
+  let offset = 0, crc = 0, lastPaint = 0;
+
+  while (offset < file.size) {
+    if (c.dc.readyState !== 'open') { row.note('Connection dropped mid-transfer.', 'bad'); return; }
+    if (c.dc.bufferedAmount > HIGH_WATER) {
+      await new Promise((r) => c.dc.addEventListener('bufferedamountlow', r, { once: true }));
+    }
+    // slice() keeps exactly one chunk in memory. file.arrayBuffer() on a large
+    // file is an instant out-of-memory crash on a phone.
+    const buf = await file.slice(offset, offset + chunkSize).arrayBuffer();
+    crc = crc32(buf, crc);
+    c.dc.send(buf);
+    offset += buf.byteLength;
+
+    const now = performance.now();
+    if (now - lastPaint > 100) {
+      lastPaint = now;
+      row.progress(offset / file.size);
+      row.meta(`${fmtBytes(offset)} / ${fmtBytes(file.size)} · ${fmtRate(offset, now - t0)}`);
+      await new Promise((r) => setTimeout(r, 0)); // let the UI breathe
+    }
+  }
+
+  c.dc.send(JSON.stringify({ t: 'end', crc }));
+  const ms = performance.now() - t0;
+  row.progress(1);
+  row.meta(`${fmtBytes(file.size)} · ${fmtRate(file.size, ms)}`);
+  row.note(`Sent in ${(ms / 1000).toFixed(1)}s · ${path.label} · ${fmtBytes(chunkSize)} chunks`, path.cls);
+}
+
+// ── receiving ───────────────────────────────────────────────────────────────
+async function onChannelMessage(c, data) {
+  if (typeof data !== 'string') {          // binary → file payload
+    if (!c.rx) return;
+    const r = c.rx;
+    try {
+      await r.writer.write(data);
+    } catch (err) {
+      failIncoming(c, `Could not write to storage: ${err.message}`);
+      return;
+    }
+    r.received += data.byteLength;
+    r.crc = crc32(data, r.crc);
+
+    const now = performance.now();
+    if (now - r.lastPaint > 100) {
+      r.lastPaint = now;
+      r.row.progress(r.received / r.size);
+      r.row.meta(`${fmtBytes(r.received)} / ${fmtBytes(r.size)} · ${fmtRate(r.received, now - r.t0)}`);
+    }
+    return;
+  }
+
+  const m = JSON.parse(data);
+
+  if (m.t === 'offer') {
+    promptAccept(c, m);
+  } else if (m.t === 'accept' || m.t === 'decline') {
+    c.awaitVerdict?.(m.t);
+    c.awaitVerdict = null;
+  } else if (m.t === 'start') {
+    if (c.rx) c.rx.chunkSize = m.chunkSize;
+  } else if (m.t === 'end') {
+    await finishIncoming(c, m.crc);
+  }
+}
+
+function promptAccept(c, offer) {
+  const from = peers.get(c.peerId)?.name ?? c.peerId;
+  const name = safeName(offer.name);
+  const row = addRow(name, `${from} wants to send this.`);
+  row.meta(fmtBytes(offer.size));
+
+  const accept = document.createElement('button');
+  accept.className = 'btn primary';
+  accept.textContent = 'Accept';
+  const decline = document.createElement('button');
+  decline.className = 'btn';
+  decline.textContent = 'Decline';
+
+  decline.onclick = () => {
+    c.dc.send(JSON.stringify({ t: 'decline' }));
+    row.actions(null);
+    row.note('Declined.', 'warn');
+  };
+
+  // This click is a user gesture, which is what makes the "save straight to
+  // disk" path legal. Without an explicit accept step it is unavailable.
+  accept.onclick = async () => {
+    row.actions(null);
+
+    const quota = await navigator.storage?.estimate?.().catch(() => null);
+    if (quota && quota.quota - quota.usage < offer.size) {
+      c.dc.send(JSON.stringify({ t: 'decline' }));
+      row.note(`Not enough room: this device has about ${fmtBytes(quota.quota - quota.usage)} available for `
+             + `browser storage, and the file is ${fmtBytes(offer.size)}.`, 'bad');
+      return;
+    }
+
+    let writer;
+    try {
+      writer = await makeWriter(name);
+    } catch (err) {
+      c.dc.send(JSON.stringify({ t: 'decline' }));
+      row.note(err.name === 'AbortError' ? 'Cancelled.' : `No usable storage: ${err.message}`, 'warn');
+      return;
+    }
+
+    c.rx = { name, size: offer.size, received: 0, crc: 0, writer, row,
+             t0: performance.now(), lastPaint: 0 };
+    row.note(`Receiving via ${writer.tier}…`);
+    c.dc.send(JSON.stringify({ t: 'accept' }));
+  };
+
+  row.actions([accept, decline]);
+}
+
+async function finishIncoming(c, senderCrc) {
+  const r = c.rx;
+  if (!r) return;
+  c.rx = null;
+
+  const ms = performance.now() - r.t0;
+  let blob = null;
+  try {
+    blob = await r.writer.close();
+  } catch (err) {
+    r.row.note(`Failed to save: ${err.message}`, 'bad');
+    return;
+  }
+
+  r.row.progress(1);
+  r.row.meta(`${fmtBytes(r.received)} · ${fmtRate(r.received, ms)}`);
+
+  const sizeOk = r.received === r.size;
+  const crcOk = r.crc === senderCrc;
+
+  if (!sizeOk || !crcOk) {
+    r.row.note(`Corrupt: ${sizeOk ? 'checksum mismatch' : `expected ${r.size} bytes, got ${r.received}`}.`, 'bad');
+    return;
+  }
+
+  r.row.note(`Received intact in ${(ms / 1000).toFixed(1)}s via ${r.writer.tier} · checksum verified`, 'ok');
+
+  if (blob) {
+    const a = document.createElement('a');
+    a.className = 'dl';
+    a.href = URL.createObjectURL(blob);
+    a.download = r.name;
+    a.textContent = `Save ${r.name}`;
+    r.row.el.appendChild(a);
+  }
+}
+
+function failIncoming(c, msg) {
+  const r = c.rx;
+  if (!r) return;
+  c.rx = null;
+  r.writer.close().catch(() => {});
+  r.row.note(msg, 'bad');
+}
+
+// ── receive-side storage tiers ──────────────────────────────────────────────
+// Which tier a device lands on decides its maximum practical file size.
+// Reporting the tier in the UI is the whole point of M1 on mobile.
+async function makeWriter(name) {
+  // Tier 1 — straight to a location the user picks. Chromium desktop only.
+  if (window.showSaveFilePicker) {
+    const handle = await window.showSaveFilePicker({ suggestedName: name });
+    const w = await handle.createWritable();
+    return {
+      tier: 'disk (File System Access)',
+      write: (chunk) => w.write(chunk),
+      close: async () => { await w.close(); return null; },
+    };
+  }
+
+  // Tier 2 — stream into the Origin Private File System, hand back a Blob at
+  // the end. Bounded by storage quota rather than RAM, so this is the tier
+  // that has to carry large files on iOS and Android.
+  if (navigator.storage?.getDirectory) {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const handle = await root.getFileHandle(`rx-${Date.now()}`, { create: true });
+      if (handle.createWritable) {
+        const w = await handle.createWritable();
+        return {
+          tier: 'OPFS stream',
+          write: (chunk) => w.write(chunk),
+          close: async () => { await w.close(); return await handle.getFile(); },
+        };
+      }
+    } catch { /* fall through to memory */ }
+  }
+
+  // Tier 3 — in memory. Works everywhere, dies on large files. This is the
+  // tier behind the "blob resource" failures reported on iOS.
+  const parts = [];
+  return {
+    tier: 'memory (small files only)',
+    write: (chunk) => { parts.push(chunk); },
+    close: async () => new Blob(parts),
+  };
+}
+
+// ── connection path ─────────────────────────────────────────────────────────
+// The privacy claim should be checkable, not just asserted. 'host'/'prflx' on
+// both ends means the bytes stayed on the local network.
+async function describePath(pc) {
+  const stats = await pc.getStats();
+  const byId = new Map();
+  let pair = null;
+  stats.forEach((r) => {
+    byId.set(r.id, r);
+    if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated ?? true)) pair = r;
+  });
+  if (!pair) return { label: 'route unknown', cls: '' };
+
+  const lt = byId.get(pair.localCandidateId)?.candidateType;
+  const rt = byId.get(pair.remoteCandidateId)?.candidateType;
+  const local = (t) => t === 'host' || t === 'prflx';
+
+  if (lt === 'relay' || rt === 'relay') return { label: 'relayed through a server', cls: 'bad' };
+  if (local(lt) && local(rt))           return { label: 'local network', cls: 'ok' };
+  return { label: `internet route (${lt} ↔ ${rt})`, cls: 'warn' };
+}
+
+// Three failures that look identical to the user have completely different
+// causes. Conflating them is exactly the "nobody can tell why it broke"
+// complaint this project exists to fix, so separate them explicitly.
+async function diagnoseFailure(c) {
+  const stats = await c.pc.getStats();
+  let localCandidates = 0, remoteCandidates = 0, pairs = 0;
+  stats.forEach((r) => {
+    if (r.type === 'local-candidate') localCandidates++;
+    if (r.type === 'remote-candidate') remoteCandidates++;
+    if (r.type === 'candidate-pair') pairs++;
+  });
+
+  const who = peers.get(c.peerId)?.name ?? c.peerId;
+  const row = addRow(`Connection to ${who} failed`, '');
+
+  let msg;
+  if (localCandidates === 0) {
+    msg = 'This device produced no network routes at all, so WebRTC could not see any '
+        + 'usable network interface. A VPN or a privacy extension is the usual cause.';
+  } else if (remoteCandidates === 0) {
+    msg = `This device offered ${localCandidates} route(s), but the other device never `
+        + 'replied with any of its own — so nothing could even be attempted. Both pages '
+        + 'must be open and connected at the same moment. Reload both and retry.';
+  } else if (pairs === 0) {
+    msg = `Both sides exchanged routes (${localCandidates} local, ${remoteCandidates} remote) `
+        + 'but no pair was ever formed. Usually a stalled handshake — reload both and retry.';
+  } else {
+    msg = `All ${pairs} candidate route(s) were tried and every one failed. This network is `
+        + 'very likely blocking device-to-device traffic (client isolation), which is common '
+        + 'on school, café and guest Wi-Fi. Test with a phone hotspot to confirm.';
+  }
+  row.note(msg, 'bad');
+}
+
+// ── capability readout ──────────────────────────────────────────────────────
+async function renderCaps() {
+  const quota = await navigator.storage?.estimate?.().catch(() => null);
+  const rows = [
+    ['Secure context', window.isSecureContext ? 'yes' : 'NO — WebRTC will not work'],
+    ['WebRTC', 'RTCPeerConnection' in window ? 'available' : 'MISSING'],
+    ['Save-to-disk (Tier 1)', window.showSaveFilePicker ? 'yes' : 'no'],
+    ['OPFS (Tier 2)', navigator.storage?.getDirectory ? 'yes' : 'no'],
+    ['Storage available', quota ? `${fmtBytes(quota.quota - quota.usage)} of ${fmtBytes(quota.quota)}` : 'unknown'],
+    ['Origin', location.origin],
+  ];
+  $('#caps').innerHTML = '';
+  for (const [k, v] of rows) {
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v;
+    $('#caps').append(dt, dd);
+  }
+}
+
+renderCaps();
+connectWS();
+</script>
+</body>
+</html>
