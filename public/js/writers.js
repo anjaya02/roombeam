@@ -34,19 +34,33 @@ export const TIER_LABELS = {
   discard: 'discarded (measurement mode)',
 };
 
+/** iOS and iPadOS, including an iPad that reports itself as a desktop Mac. */
+function isIos() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod/i.test(ua)) return true;
+  // iPadOS 13+ pretends to be macOS; a touch-capable "Mac" is really an iPad.
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
 /**
- * Whether to skip the File System Access pickers in favour of a streamed
- * download. True on phones and tablets, where the picker dialog is confusing and
- * a file written through it lands where the gallery and file manager cannot find
- * it — the browser's own Downloads folder is what a person there expects, and it
- * comes with a download notification for free.
+ * Whether to skip the File System Access pickers and stream the file into the
+ * browser's Downloads folder instead. True on Android phones and tablets, where
+ * the picker dialog is confusing and a file written through it lands where the
+ * gallery and file manager cannot find it — Downloads is what a person there
+ * expects, and it comes with a download notification for free.
+ *
+ * iOS is deliberately excluded. Every browser there is Safari underneath, and
+ * Safari does not drive the service-worker streamed download reliably — the
+ * hidden-iframe download either does nothing or opens inline. iOS keeps the
+ * OPFS/memory tier and its Save link, which recent Safari does handle.
  *
  * userAgentData.mobile is the reliable signal where it exists; the regex is the
- * fallback for Safari and Firefox, which do not implement it.
+ * fallback for the browsers that do not implement it.
  */
 export function prefersStreamedDownload() {
+  if (isIos()) return false;
   if (navigator.userAgentData) return navigator.userAgentData.mobile === true;
-  return /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(navigator.userAgent || '');
+  return /Android|Mobile|Silk|Kindle/i.test(navigator.userAgent || '');
 }
 
 // ── capability probe ─────────────────────────────────────────────────────────
@@ -230,14 +244,15 @@ export async function beginReceiveSession({ files, preference = 'auto', discard 
   // Synchronous, so the dialog below is still inside the user's tap.
   const caps = syncCapabilities();
   const total = files.reduce((sum, file) => sum + file.size, 0);
-  const mobile = prefersStreamedDownload();
+  const streamToDownloads = prefersStreamedDownload();
 
   // The File System Access pickers are the best experience on a desktop — the
-  // user chooses exactly where the file goes — but the wrong one on a phone,
+  // user chooses exactly where the file goes — but the wrong one on Android,
   // where the dialog is confusing and the file lands somewhere the gallery and
-  // file manager cannot find. So on mobile we skip the pickers entirely and let
-  // the streamed-download tier below put the file in the Downloads folder.
-  if (preference === 'auto' && !mobile) {
+  // file manager cannot find. There we skip the pickers entirely and let the
+  // streamed-download tier below put the file in the Downloads folder instead.
+  // (iOS has no pickers to skip, and keeps the OPFS/memory tier and Save link.)
+  if (preference === 'auto' && !streamToDownloads) {
     if (files.length > 1 && caps.directoryPicker) {
       const dir = await self.showDirectoryPicker({ mode: 'readwrite', id: 'roombeam' });
       return new FileSystemSession(dir, verify);
@@ -254,11 +269,11 @@ export async function beginReceiveSession({ files, preference = 'auto', discard 
   // point to check there is room. Refusing now with a number is better than
   // failing at 90% with a quota error — which is the same outcome plus the wait.
   //
-  // On a phone, prefer streaming into Downloads over OPFS: it lands in a place
+  // On Android, prefer streaming into Downloads over OPFS: it lands in a place
   // the user can actually find, and the browser raises its own download
   // notification, where OPFS would buffer the whole file against the storage
   // quota and hand back a Save button the user then has to notice and tap.
-  const chosen = (mobile && caps.swController)
+  const chosen = (streamToDownloads && caps.swController)
     ? 'download'
     : caps.opfs
       ? (caps.opfsSync ? 'opfs' : 'opfs-async')
