@@ -36,6 +36,9 @@ async function loadIceServers() {
   } catch { /* keep the STUN-only fallback */ }
 }
 
+// pendingTarget holds the id of the device a picked file is destined for, or
+// this sentinel to mean "every device in the room".
+const ALL = Symbol('send-to-all');
 let pendingTarget = null;
 
 const signaling = new Signaling(() => ({ name: identity.name, pubkey: identity.publicKey }));
@@ -135,9 +138,14 @@ signaling.on('server-error', (code, message) => {
 $('#picker').addEventListener('change', (event) => {
   const files = [...event.target.files];
   event.target.value = ''; // so choosing the same file twice still fires
-  if (files.length && pendingTarget) startSend(pendingTarget, files);
+  if (files.length) {
+    if (pendingTarget === ALL) startSendAll(files);
+    else if (pendingTarget) startSend(pendingTarget, files);
+  }
   pendingTarget = null;
 });
+
+$('#send-all').addEventListener('click', () => { pendingTarget = ALL; $('#picker').click(); });
 
 async function startSend(peerId, files) {
   const link = network.linkTo(peerId);
@@ -146,6 +154,24 @@ async function startSend(peerId, files) {
     return;
   }
   await transfers.send(link, files);
+}
+
+/**
+ * Offer the same files to every device in the room at once. There is no
+ * broadcast on the wire — each device gets its own direct transfer it accepts
+ * for itself — so this is exactly the per-device send, fanned out. distinctPeers
+ * collapses a reconnected phone or a second tab, so nobody is offered it twice.
+ */
+function startSendAll(files) {
+  const peers = network.distinctPeers();
+  if (!peers.length) {
+    ui.toast('No other devices in the room to send to yet.', 'warn');
+    return;
+  }
+  // Kicked off together rather than awaited in turn, so one slow handshake does
+  // not hold up the others.
+  for (const peer of peers) startSend(peer.id, files);
+  ui.toast(`Offering to ${peers.length} device${peers.length === 1 ? '' : 's'} — each one accepts for itself.`);
 }
 
 // ── name ─────────────────────────────────────────────────────────────────────

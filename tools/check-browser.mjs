@@ -252,6 +252,12 @@ try {
   const rosterSize = await sender.eval(`return document.querySelectorAll('#peers .peer').length;`);
   check('exactly one device is listed', () => strictEqual(rosterSize, 1));
 
+  const sendAllShown = await sender.eval(`
+    const btn = document.querySelector('#send-all');
+    return Boolean(btn) && !btn.hidden && btn.offsetParent !== null;
+  `);
+  check('"Send to everyone" appears once a device is present', () => ok(sendAllShown));
+
   // A real drop event on the device row — the same path a person uses.
   await sender.eval(`
     const bytes = new Uint8Array(${FILE_BYTES});

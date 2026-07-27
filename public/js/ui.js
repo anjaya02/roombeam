@@ -129,6 +129,8 @@ export class UI {
 
   renderPeers(peers, links) {
     const box = $('#peers');
+    // Only worth offering "send to everyone" when there is at least one someone.
+    $('#send-all').hidden = !peers.length;
 
     if (!peers.length) {
       box.replaceChildren(el('div', {
