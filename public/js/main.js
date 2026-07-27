@@ -230,7 +230,21 @@ $('#copy-link').addEventListener('click', async () => {
   }
 });
 
-$('#leave-room').addEventListener('click', () => signaling.joinRoom('network'));
+/**
+ * Back to the room this device would have found on its own.
+ *
+ * The address bar is cleared here rather than left to the `room` handler that
+ * normally keeps it in step. That handler only runs once the server has
+ * confirmed the change, and `joinRoom` does nothing but record an intent while
+ * signalling is down — so the URL would go on naming a room the user has just
+ * left, which is also the URL they would copy, bookmark or reload into.
+ */
+function goHome() {
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  signaling.joinRoom('network');
+}
+
+$('#leave-room').addEventListener('click', goHome);
 
 // The wordmark is a real link, so it can be opened in a new tab or copied. A
 // plain click navigates in place instead: reloading the page would abandon a
@@ -239,7 +253,7 @@ $('#leave-room').addEventListener('click', () => signaling.joinRoom('network'));
 $('#home-link').addEventListener('click', (event) => {
   if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   event.preventDefault();
-  signaling.joinRoom('network');
+  goHome();
 });
 
 // ── QR scanning ──────────────────────────────────────────────────────────────

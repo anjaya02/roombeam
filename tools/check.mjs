@@ -11,6 +11,9 @@
 
 import { deepStrictEqual, ok, strictEqual } from 'node:assert';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join, normalize } from 'node:path/posix';
+import { fileURLToPath } from 'node:url';
 import { encodeQr } from '../public/js/qr.js';
 import { crc32, crcHex } from '../public/js/crc32.js';
 import { ALPHABET, CODE_LENGTH, formatCode, generateCode, normalizeCode } from '../public/shared/code.js';
@@ -457,6 +460,58 @@ test('idle peers are the ones swept', () => {
   rooms.join(stale, null);
   stale.lastSeen = Date.now() - LIMITS.idleMs - 1000;
   deepStrictEqual([...rooms.stale()].map((p) => p.id), ['stale']);
+});
+
+// ── the offline shell lists what the app actually loads ──────────────────────
+//
+// Adding a module and forgetting to cache it costs nothing online — the worker
+// is network-first — and breaks the app completely offline, because one missing
+// import stops the whole graph from evaluating. Nothing about the failure points
+// at the service worker, so it is worth deriving the list rather than trusting
+// that someone remembered.
+
+const PUBLIC = fileURLToPath(new URL('../public/', import.meta.url));
+
+/** Every module reachable from an entry point by static import. */
+function reachableFrom(entry) {
+  const seen = new Set();
+  const queue = [entry];
+
+  while (queue.length) {
+    const rel = queue.shift();
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+
+    const source = readFileSync(join(PUBLIC, rel), 'utf8');
+    const imports = source.matchAll(/(?:^|\n)\s*(?:import|export)\b[^'"\n]*?from\s*['"]([^'"]+)['"]/g);
+    for (const [, spec] of imports) {
+      if (spec.startsWith('.')) queue.push(normalize(join(dirname(rel), spec)));
+    }
+  }
+  return seen;
+}
+
+test('every module the app imports is in the offline shell', () => {
+  const sw = readFileSync(join(PUBLIC, 'sw.js'), 'utf8');
+  const block = /const SHELL = \[([\s\S]*?)\];/.exec(sw);
+  ok(block, 'sw.js should still declare a SHELL array');
+
+  const shell = new Set([...block[1].matchAll(/'([^']+)'/g)].map(([, path]) => path));
+  const missing = [...reachableFrom('js/main.js')].filter((rel) => !shell.has(`/${rel}`));
+
+  deepStrictEqual(missing, [], `not cached: ${missing.join(', ')}`);
+});
+
+test('the shell does not list modules that no longer exist', () => {
+  const sw = readFileSync(join(PUBLIC, 'sw.js'), 'utf8');
+  const shell = [...(/const SHELL = \[([\s\S]*?)\];/.exec(sw)?.[1] ?? '').matchAll(/'([^']+)'/g)]
+    .map(([, path]) => path)
+    .filter((path) => path.endsWith('.js'));
+
+  const gone = shell.filter((path) => {
+    try { readFileSync(join(PUBLIC, path.slice(1))); return false; } catch { return true; }
+  });
+  deepStrictEqual(gone, [], `listed but missing: ${gone.join(', ')}`);
 });
 
 // ── result ───────────────────────────────────────────────────────────────────

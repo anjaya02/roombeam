@@ -479,9 +479,14 @@ try {
       if (!link.getAttribute('href')) return 'not a real link';
       window.__stayed = true; // a reload would wipe this
       link.click();
+      // Read the address bar before anything can have come back from the server.
+      // Waiting for the room change to be confirmed would leave the URL naming a
+      // room the user has left — and that is the URL they would copy or reload.
+      const immediate = location.hash;
       await new Promise((r) => setTimeout(r, 1500));
       return {
         stayed: window.__stayed === true,
+        immediate,
         hash: location.hash,
         room: document.querySelector('#room-what')?.textContent ?? '',
       };
@@ -491,6 +496,8 @@ try {
   check('the wordmark returns to the home room without reloading the page', () => {
     ok(typeof home === 'object', String(home));
     ok(home.stayed, 'the page reloaded, which would abandon a running transfer');
+    strictEqual(home.immediate, '',
+      `the room code should leave the address bar on the click, not when the server replies, got "${home.immediate}"`);
     strictEqual(home.hash, '', `the room code should be off the address bar, got "${home.hash}"`);
     ok(/network address/i.test(home.room), `still in a code room: ${home.room}`);
   });
