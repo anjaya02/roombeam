@@ -29,10 +29,25 @@ export const TIER_LABELS = {
   disk: 'disk (File System Access)',
   opfs: 'OPFS, synchronous worker writes',
   'opfs-async': 'OPFS, async writes',
-  download: 'streamed to Downloads',
+  download: 'Downloads folder',
   memory: 'memory — small files only',
   discard: 'discarded (measurement mode)',
 };
+
+/**
+ * Whether to skip the File System Access pickers in favour of a streamed
+ * download. True on phones and tablets, where the picker dialog is confusing and
+ * a file written through it lands where the gallery and file manager cannot find
+ * it — the browser's own Downloads folder is what a person there expects, and it
+ * comes with a download notification for free.
+ *
+ * userAgentData.mobile is the reliable signal where it exists; the regex is the
+ * fallback for Safari and Firefox, which do not implement it.
+ */
+export function prefersStreamedDownload() {
+  if (navigator.userAgentData) return navigator.userAgentData.mobile === true;
+  return /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(navigator.userAgent || '');
+}
 
 // ── capability probe ─────────────────────────────────────────────────────────
 
@@ -215,8 +230,14 @@ export async function beginReceiveSession({ files, preference = 'auto', discard 
   // Synchronous, so the dialog below is still inside the user's tap.
   const caps = syncCapabilities();
   const total = files.reduce((sum, file) => sum + file.size, 0);
+  const mobile = prefersStreamedDownload();
 
-  if (preference === 'auto') {
+  // The File System Access pickers are the best experience on a desktop — the
+  // user chooses exactly where the file goes — but the wrong one on a phone,
+  // where the dialog is confusing and the file lands somewhere the gallery and
+  // file manager cannot find. So on mobile we skip the pickers entirely and let
+  // the streamed-download tier below put the file in the Downloads folder.
+  if (preference === 'auto' && !mobile) {
     if (files.length > 1 && caps.directoryPicker) {
       const dir = await self.showDirectoryPicker({ mode: 'readwrite', id: 'roombeam' });
       return new FileSystemSession(dir, verify);
@@ -232,9 +253,16 @@ export async function beginReceiveSession({ files, preference = 'auto', discard 
   // The remaining tiers all draw on the browser's storage quota, so this is the
   // point to check there is room. Refusing now with a number is better than
   // failing at 90% with a quota error — which is the same outcome plus the wait.
-  const chosen = caps.opfs
-    ? (caps.opfsSync ? 'opfs' : 'opfs-async')
-    : caps.swController ? 'download' : 'memory';
+  //
+  // On a phone, prefer streaming into Downloads over OPFS: it lands in a place
+  // the user can actually find, and the browser raises its own download
+  // notification, where OPFS would buffer the whole file against the storage
+  // quota and hand back a Save button the user then has to notice and tap.
+  const chosen = (mobile && caps.swController)
+    ? 'download'
+    : caps.opfs
+      ? (caps.opfsSync ? 'opfs' : 'opfs-async')
+      : caps.swController ? 'download' : 'memory';
 
   if (chosen === 'memory' && total > MEMORY_TIER_LIMIT) {
     throw new StorageUnavailable(
