@@ -60,15 +60,18 @@ let roomProblem = '';
 
 const paintRoom = () => ui.renderRoom(signaling.room, {
   canScan: canScan(),
-  others: network.roster.size,
+  // Count devices, not connections, so a reconnected phone or a second tab does
+  // not inflate the total the way it used to show a duplicate row.
+  others: network.distinctPeers().length,
   problem: roomProblem,
 });
 
 const paintPeers = coalesce(async () => {
+  const peers = network.distinctPeers();
   // Fingerprints have to be hashed before they can be shown, and rendering is
   // synchronous — so resolve them first, then draw once with the real labels.
-  await warmFingerprints([...network.roster.values()].map((peer) => peer.pubkey));
-  ui.renderPeers(network.roster, network.links);
+  await warmFingerprints(peers.map((peer) => peer.pubkey));
+  ui.renderPeers(peers, network.links);
   // The room line carries a device count, so it is only correct if it is redrawn
   // whenever the roster is.
   paintRoom();

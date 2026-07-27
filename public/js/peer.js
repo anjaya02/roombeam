@@ -608,6 +608,31 @@ export class PeerNetwork extends Emitter {
     return this.links.get(id) ?? this.#create(id);
   }
 
+  /**
+   * One entry per device, not per connection. A phone that dropped Wi-Fi and
+   * reconnected lingers as a stale session beside its live one until the server
+   * sweeps it, and a browser open in two tabs shares a single identity — both
+   * show the same device twice. Collapse by identity key, keeping whichever
+   * session has a live connection. Peers with no key stay as they are, since
+   * there is nothing to tell them apart by.
+   *
+   * @returns {import('./peer.js').Peer[]}
+   */
+  distinctPeers() {
+    const alive = (id) => {
+      const link = this.links.get(id);
+      return Boolean(link && (link.openChannel || link.state === 'connected' || link.state === 'connecting'));
+    };
+    const byKey = new Map();
+    const keyless = [];
+    for (const peer of this.roster.values()) {
+      if (!peer.pubkey) { keyless.push(peer); continue; }
+      const current = byKey.get(peer.pubkey);
+      if (!current || (alive(peer.id) && !alive(current.id))) byKey.set(peer.pubkey, peer);
+    }
+    return [...byKey.values(), ...keyless];
+  }
+
   closeAll() {
     for (const link of this.links.values()) link.close();
     this.links.clear();

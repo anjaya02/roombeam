@@ -127,10 +127,10 @@ export class UI {
 
   // ── devices ──────────────────────────────────────────────────────────────
 
-  renderPeers(roster, links) {
+  renderPeers(peers, links) {
     const box = $('#peers');
 
-    if (!roster.size) {
+    if (!peers.length) {
       box.replaceChildren(el('div', {
         class: 'empty',
         text: 'No other devices yet. Open this same page on another device on the same Wi-Fi, or share a room code.',
@@ -139,7 +139,7 @@ export class UI {
     }
 
     const rows = [];
-    for (const peer of roster.values()) {
+    for (const peer of peers) {
       const link = links.get(peer.id);
       const row = el('button', { type: 'button', class: 'peer' });
 
