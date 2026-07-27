@@ -29,12 +29,49 @@ const HOST = process.env.HOST || '0.0.0.0';
 const TLS = (process.env.ROOMBEAM_TLS ?? 'on').toLowerCase() !== 'off';
 const TRUST_PROXY = ['1', 'true', 'yes'].includes(String(process.env.TRUST_PROXY ?? '').toLowerCase());
 
+// ICE configuration the browser fetches from /ice-servers.
+//
+//   STUN lets a device discover its own public address so two peers can often
+//   reach each other directly across networks. It is a lookup, not a relay —
+//   no file data passes through it.
+//
+//   TURN is the fallback for when a direct path cannot be punched through a
+//   strict or carrier-grade NAT: the two peers relay through it instead. That
+//   means file bytes do traverse the TURN server, so it is off unless the host
+//   supplies one. Credentials come from the environment, never the repo:
+//
+//     TURN_URLS        turn:host:3478,turns:host:5349   (comma or space list)
+//     TURN_USERNAME    the TURN username
+//     TURN_CREDENTIAL  the TURN password
+//     STUN_URLS        optional override; defaults to a public STUN server
+const splitList = (value) => String(value ?? '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+
+function buildIceServers() {
+  const servers = [];
+  const stun = splitList(process.env.STUN_URLS);
+  servers.push({ urls: stun.length ? stun : ['stun:stun.l.google.com:19302'] });
+
+  const turn = splitList(process.env.TURN_URLS);
+  const username = process.env.TURN_USERNAME;
+  const credential = process.env.TURN_CREDENTIAL;
+  if (turn.length && username && credential) {
+    servers.push({ urls: turn, username, credential });
+  }
+  return servers;
+}
+
+const iceServers = buildIceServers();
+const hasTurn = iceServers.some((s) => [].concat(s.urls).some((u) => /^turns?:/i.test(u)));
+
 const startedAt = Date.now();
 const interfaces = listInterfaces();
 const primary = interfaces[0]?.address ?? '127.0.0.1';
 
 const rule = '─'.repeat(64);
 console.log(`\n${rule}\n  RoomBeam — files, straight across\n${rule}`);
+console.log(hasTurn
+  ? '\n  TURN relay configured — devices on different networks can connect.'
+  : '\n  No TURN relay — cross-network transfers work only when a direct path exists.');
 
 let signaling;
 const handler = createRequestHandler({
@@ -44,6 +81,7 @@ const handler = createRequestHandler({
   roots: { '/': join(ROOT, 'public') },
   stats: () => signaling?.stats() ?? { rooms: 0, peers: 0 },
   startedAt,
+  iceServers,
 });
 
 const server = TLS

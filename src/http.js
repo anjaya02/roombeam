@@ -53,8 +53,9 @@ const SECURITY_HEADERS = {
  * @param {{ roots: Record<string, string>, stats: () => object, startedAt: number }} opts
  *   roots maps a URL prefix to a directory. Longest prefix wins.
  */
-export function createRequestHandler({ roots, stats, startedAt }) {
+export function createRequestHandler({ roots, stats, startedAt, iceServers = [] }) {
   const mounts = Object.entries(roots).sort((a, b) => b[0].length - a[0].length);
+  const iceBody = JSON.stringify({ iceServers });
 
   return function handle(req, res) {
     const finish = (status, headers, body) => {
@@ -86,6 +87,15 @@ export function createRequestHandler({ roots, stats, startedAt }) {
         ...stats(),
       });
       return finish(200, { 'content-type': MIME['.json'], 'cache-control': 'no-store' }, body);
+    }
+
+    // The ICE servers the browser should use — a STUN server for NAT discovery
+    // and, if the host has configured one, a TURN relay so two devices on
+    // different networks can still connect when a direct path cannot be found.
+    // Served rather than hard-coded so the credentials live in the host's
+    // environment, never in the client bundle or this repository.
+    if (pathname === '/ice-servers') {
+      return finish(200, { 'content-type': MIME['.json'], 'cache-control': 'no-store' }, iceBody);
     }
 
     const mount = mounts.find(([prefix]) => pathname === prefix || pathname.startsWith(prefix));

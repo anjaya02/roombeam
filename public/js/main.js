@@ -13,8 +13,28 @@ import { probeSyncAccess, sweepOpfs } from './writers.js';
 // Wiring, and nothing else. Every decision this file makes is about which module
 // to hand something to.
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
-const iceServers = () => (settings.get('useStun') ? ICE_SERVERS : []);
+// A STUN-only fallback, used until /ice-servers answers (and if it never does).
+// The server's list normally replaces this and may add a TURN relay.
+const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+let configuredIce = FALLBACK_ICE;
+const iceServers = () => (settings.get('useStun') ? configuredIce : []);
+
+/**
+ * Ask the server which ICE servers to use. This is where a configured TURN
+ * relay arrives, so that two devices on different networks can connect when no
+ * direct path can be punched through. Falls back silently to STUN-only.
+ */
+async function loadIceServers() {
+  try {
+    const res = await fetch('/ice-servers', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (Array.isArray(data.iceServers) && data.iceServers.length) {
+      configuredIce = data.iceServers;
+      network.setIceServers(iceServers());
+    }
+  } catch { /* keep the STUN-only fallback */ }
+}
 
 let pendingTarget = null;
 
@@ -311,6 +331,11 @@ async function start() {
     await probeSyncAccess();
     refreshDiagnostics();
   });
+
+  // Learn the ICE servers (including any TURN relay) before the first
+  // connection forms, so a cross-network peer has a relay to fall back on from
+  // the start rather than after a reconnect.
+  await loadIceServers();
 
   // A room code in the URL is how a QR scan and a shared link both arrive.
   const fromUrl = codeFromUrl(location.hash);
