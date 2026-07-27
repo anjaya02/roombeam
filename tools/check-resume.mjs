@@ -29,6 +29,18 @@ globalThis.localStorage = {
 };
 globalThis.navigator ??= {};
 
+/** Listeners the modules under test register, so a test can fire them. */
+const listeners = new Map();
+globalThis.document = {
+  visibilityState: 'visible',
+  addEventListener(event, fn) {
+    if (!listeners.has(event)) listeners.set(event, []);
+    listeners.get(event).push(fn);
+  },
+};
+globalThis.location = { protocol: 'https:', host: 'roombeam.test' };
+globalThis.addEventListener ??= () => {};
+
 const { STATUS, TransferManager } = await import('../public/js/transfer.js');
 const { settings } = await import('../public/js/settings.js');
 
@@ -449,6 +461,88 @@ await test('a file-start for an unknown transfer is refused, not silently droppe
   }
 });
 
+// ── staying alive while nobody is looking ────────────────────────────────────
+//
+// Only the wiring is testable here. Whether a platform honours a screen lock, or
+// counts a quiet audio loop as "playing media", is a heuristic no test in this
+// repo can reach. What it can pin down is that both are asked for at the right
+// moments, that each obeys its own setting, and that neither outlives the last
+// transfer.
+
+function fakeWakeLock() {
+  const state = { requests: 0, revoke: () => {} };
+  globalThis.navigator.wakeLock = {
+    async request() {
+      state.requests++;
+      const fns = [];
+      state.revoke = () => fns.splice(0).forEach((fn) => fn());
+      return {
+        addEventListener: (_event, fn) => fns.push(fn),
+        release: async () => {},
+      };
+    },
+  };
+  return state;
+}
+
+globalThis.Audio = class FakeAudio {
+  static made = 0;
+  paused = true;
+  constructor(src) { this.src = src; FakeAudio.made++; }
+  play() { this.paused = false; return Promise.resolve(); }
+  pause() { this.paused = true; }
+};
+globalThis.URL.createObjectURL ??= () => 'blob:test';
+globalThis.URL.revokeObjectURL ??= () => {};
+
+const { holdingBackground } = await import('../public/js/awake.js');
+
+await test('the screen lock is taken again after the platform revokes it', async () => {
+  // Only this test's manager should answer the event.
+  listeners.set('visibilitychange', []);
+  const lock = fakeWakeLock();
+  const { clock } = await interruptedTransfer();
+  try {
+    ok(lock.requests >= 1, 'a running transfer should hold the screen');
+
+    // What the platform does on every hide. Nothing asked for it back before.
+    lock.revoke();
+    const held = lock.requests;
+    for (const fn of listeners.get('visibilitychange') ?? []) fn();
+    await flush();
+
+    ok(lock.requests > held,
+      'coming back into view is the only chance to hold one again, and it was not being taken');
+  } finally {
+    clock.restore();
+    delete globalThis.navigator.wakeLock;
+  }
+});
+
+await test('the background keepalive stays off unless it is asked for', async () => {
+  const made = Audio.made;
+  const { clock } = await interruptedTransfer();
+  try {
+    strictEqual(Audio.made, made, 'nothing should play audio by default');
+    strictEqual(holdingBackground(), false);
+  } finally {
+    clock.restore();
+  }
+});
+
+await test('the background keepalive runs with a transfer and stops with it', async () => {
+  settings.set('backgroundKeepalive', true);
+  const { transfers, transfer, clock } = await interruptedTransfer();
+  try {
+    ok(holdingBackground(), 'a transfer that is still going should be holding it');
+    transfers.cancel(transfer);
+    strictEqual(holdingBackground(), false, 'it must not outlive the last transfer');
+  } finally {
+    settings.set('backgroundKeepalive', false);
+    clock.restore();
+  }
+});
+
 // ── the signalling socket's own liveness ─────────────────────────────────────
 //
 // The failure this pins down: a phone frozen in the background stops sending
@@ -476,19 +570,7 @@ class FakeSocket {
   close() { this.readyState = 3; this.onclose?.(); }
 }
 
-const listeners = new Map();
-const fakeDocument = {
-  visibilityState: 'visible',
-  addEventListener(event, fn) {
-    if (!listeners.has(event)) listeners.set(event, []);
-    listeners.get(event).push(fn);
-  },
-};
-
 globalThis.WebSocket = FakeSocket;
-globalThis.document = fakeDocument;
-globalThis.location = { protocol: 'https:', host: 'roombeam.test' };
-globalThis.addEventListener ??= () => {};
 
 const { Signaling } = await import('../public/js/signaling.js');
 

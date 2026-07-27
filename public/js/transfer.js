@@ -2,6 +2,7 @@ import { Emitter, MIB, deferred, fmtBytes, uuid, waitFor } from './util.js';
 import { MSG, negotiateChunkSize } from './protocol.js';
 import { settings } from './settings.js';
 import { StorageUnavailable, beginReceiveSession } from './writers.js';
+import { holdBackground, releaseBackground } from './awake.js';
 
 // Moving the bytes.
 //
@@ -181,6 +182,13 @@ export class TransferManager extends Emitter {
 
     setInterval(() => this.#reap(), 60_000);
     setInterval(() => this.#refreshPaths(), PATH_REFRESH_INTERVAL);
+
+    // A screen lock cannot be requested while the page is hidden and is taken
+    // away the moment it becomes so. Coming back into view is therefore the only
+    // opportunity to hold one again, and nothing was using it.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.#keepAlive();
+    });
   }
 
   #changed(transfer) { this.emit('change', transfer); }
@@ -273,7 +281,7 @@ export class TransferManager extends Emitter {
     transfer.status = STATUS.running;
     transfer.markMoving();
     this.#changed(transfer);
-    await this.#takeWakeLock();
+    await this.#keepAlive();
 
     for (const item of transfer.items) {
       if (transfer.abort.signal.aborted) break;
@@ -550,7 +558,7 @@ export class TransferManager extends Emitter {
     transfer.detail = '';
     for (const item of transfer.items) item.status = STATUS.connecting;
     this.#changed(transfer);
-    await this.#takeWakeLock();
+    await this.#keepAlive();
 
     transfer.link.send(transfer.channel, {
       t: MSG.accept,
@@ -1073,7 +1081,7 @@ export class TransferManager extends Emitter {
     transfer.chunkSize = negotiateChunkSize(transfer.link.pc, settings.get('chunkSizeOverride'));
     transfer.markMoving();
     this.#changed(transfer);
-    await this.#takeWakeLock();
+    await this.#keepAlive();
 
     // Continue with this file, then the rest of the queue.
     const remaining = transfer.items.slice(transfer.items.indexOf(item));
@@ -1188,20 +1196,41 @@ export class TransferManager extends Emitter {
   // that less likely; it is not a substitute for resume, which handles it when
   // the lock is unavailable or refused.
 
+  /** Anything actually moving, or about to. */
+  #busy() {
+    return [...this.outgoing.values(), ...this.incoming.values()]
+      .some((transfer) => !isTerminal(transfer.status) && transfer.status !== STATUS.waiting);
+  }
+
+  /**
+   * Both remedies for "nobody is looking at this page", started together because
+   * they begin and end at the same moments — but each behind its own setting,
+   * because they cost quite different things. Neither is a substitute for
+   * resume, which is what actually carries a transfer across being left alone.
+   */
+  async #keepAlive() {
+    if (!this.#busy()) return;
+    holdBackground();
+    await this.#takeWakeLock();
+  }
+
   async #takeWakeLock() {
     if (!settings.get('keepAwake') || this.#wakeLock || !navigator.wakeLock) return;
     try {
       this.#wakeLock = await navigator.wakeLock.request('screen');
+      // The platform releases this on every hide, not only when we ask it to.
+      // Dropping the reference is what lets the visibility handler ask again —
+      // without it, one glance at another app left the screen free to sleep for
+      // the rest of the transfer.
       this.#wakeLock.addEventListener('release', () => { this.#wakeLock = null; });
     } catch { /* refused, or the tab is not visible. Not worth reporting. */ }
   }
 
   #releaseWakeLock() {
-    const busy = [...this.outgoing.values(), ...this.incoming.values()]
-      .some((transfer) => !isTerminal(transfer.status) && transfer.status !== STATUS.waiting);
-    if (busy) return;
+    if (this.#busy()) return;
     this.#wakeLock?.release?.().catch(() => {});
     this.#wakeLock = null;
+    releaseBackground();
   }
 }
 

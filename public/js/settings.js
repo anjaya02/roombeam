@@ -39,6 +39,14 @@ const DEFAULTS = {
   /** Keep the screen awake during a transfer. Backgrounding a tab suspends it
    *  on iOS, which stalls the transfer until the user returns. */
   keepAwake: true,
+
+  /** Hold a near-silent audio loop open while transferring, so the platform
+   *  treats the page as playing media and does not freeze it when you switch
+   *  apps. Off by default because it is a real cost — Android shows a media
+   *  notification for it and it may take audio focus — and because what counts
+   *  as "playing audio" is an unspecified heuristic that differs per browser.
+   *  Resume is what actually makes a transfer survive being left alone. */
+  backgroundKeepalive: false,
 };
 
 class Settings extends Emitter {

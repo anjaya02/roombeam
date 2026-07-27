@@ -278,6 +278,7 @@ const SETTING_CHECKBOXES = {
   '#set-local-only': 'requireLocalRoute',
   '#set-stun': 'useStun',
   '#set-awake': 'keepAwake',
+  '#set-background': 'backgroundKeepalive',
   '#set-discard': 'discardReceived',
 };
 
