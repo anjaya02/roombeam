@@ -56,6 +56,11 @@ export class PeerLink extends Emitter {
    *  for archiving one. */
   iceLog = [];
 
+  /** The last route we read off this connection, for anything that wants to show
+   *  it without waiting on `getStats`. */
+  pathLabel = '';
+  pathTone = '';
+
   #polite;
   #signal;
   #makingOffer = false;
@@ -442,6 +447,31 @@ export class PeerLink extends Emitter {
   }
 
   /**
+   * Re-read the route and remember it on the link.
+   *
+   * `describePath` answers "unknown" until ICE has nominated a pair, so a single
+   * call placed just after connecting is a coin toss — which is why this takes a
+   * retry budget rather than leaving every caller to write the same poll loop.
+   * An "unknown" answer is never stored: keeping the last real label beats
+   * replacing it with a shrug, and this is called repeatedly during a transfer.
+   *
+   * @param {{ retries?: number }} [options]
+   */
+  async refreshPath({ retries = 0 } = {}) {
+    for (let attempt = 0; ; attempt++) {
+      const path = await this.describePath();
+      if (path.kind !== 'unknown') {
+        this.pathLabel = path.label;
+        this.pathTone = path.tone;
+        this.emit('info');
+        return path;
+      }
+      if (attempt >= retries) return path;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  }
+
+  /**
    * Why a connection failed. Four causes that look identical from the outside
    * and have nothing in common as fixes; reporting one message for all of them
    * tells the user nothing they can act on.
@@ -606,6 +636,26 @@ export class PeerNetwork extends Emitter {
   /** @returns {PeerLink|null} */
   linkTo(id) {
     return this.links.get(id) ?? this.#create(id);
+  }
+
+  /**
+   * A link to a peer, replaced first if the one we have is beyond saving.
+   *
+   * A failed or closed RTCPeerConnection never recovers. A data channel created
+   * on one sits in 'connecting' until it times out — every time, for as long as
+   * anything keeps asking — so a retry loop built on `linkTo` alone would keep
+   * handing itself the same corpse. Live connections are left strictly alone;
+   * this is only ever the difference between retrying and pretending to.
+   *
+   * @returns {PeerLink|null}
+   */
+  renew(id) {
+    const existing = this.links.get(id);
+    if (existing && (existing.state === 'failed' || existing.state === 'closed')) {
+      existing.close();
+      this.links.delete(id);
+    }
+    return this.linkTo(id);
   }
 
   /**

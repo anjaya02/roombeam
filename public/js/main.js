@@ -79,7 +79,11 @@ const paintPeers = coalesce(async () => {
   // whenever the roster is.
   paintRoom();
 });
-const paintTransfers = () => ui.renderTransfers([...transfers.outgoing.values(), ...transfers.incoming.values()]);
+// Coalesced for the same reason the roster is: this redraws every transfer row,
+// and it is driven by progress arriving from the network. Rendering straight off
+// that puts layout work directly in the path of the bytes.
+const paintTransfers = coalesce(() =>
+  ui.renderTransfers([...transfers.outgoing.values(), ...transfers.incoming.values()]));
 
 network.on('roster', paintPeers);
 network.on('link', (link) => {
@@ -92,13 +96,10 @@ network.on('link', (link) => {
   });
   // The route label belongs on the device row, not only on a transfer, so it is
   // visible before anyone commits to sending something.
-  link.on('state', async (state) => {
-    if (state === 'connected') {
-      const path = await link.describePath();
-      link.pathLabel = path.label;
-      link.pathTone = path.tone;
-      paintPeers();
-    }
+  link.on('state', (state) => {
+    // The link remembers the route and emits 'info', which is already wired to a
+    // repaint above — so this does not need to know what came back.
+    if (state === 'connected') link.refreshPath({ retries: 12 });
     refreshDiagnostics();
   });
   refreshDiagnostics();

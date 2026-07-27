@@ -23,6 +23,19 @@ const SEND_LOW_WATER = 1 * MIB;    // resume below it — deep enough that the l
 const PROGRESS_INTERVAL = 200;     // ms between progress reports to the sender
 const RESUME_KEEP_MS = 10 * 60_000; // how long a stalled transfer stays resumable
 
+// The resume handshake travels over a channel that has just come back from being
+// broken, which is precisely when a message is most likely to vanish. So it is
+// asked again rather than asked once: wait this long for an answer, then back off
+// and ask afresh until the transfer is reaped.
+const RESUME_ANSWER_TIMEOUT = 8_000;
+const RESUME_RETRY_MIN = 1_000;
+const RESUME_RETRY_MAX = 15_000;
+
+// How often a running transfer re-reads which route it is actually taking. Often
+// enough that the round-trip figure tracks the link; rare enough that `getStats`
+// stays off the hot path.
+const PATH_REFRESH_INTERVAL = 2_000;
+
 export const STATUS = {
   connecting: 'connecting',
   waiting: 'waiting',       // offered, awaiting the other side's decision
@@ -52,6 +65,16 @@ class Transfer {
   endedAt = 0;
   /** @type {AbortController} */
   abort = new AbortController();
+
+  /** Resume bookkeeping, sender side. `resuming` is true only while one attempt
+   *  is actually in flight — it is a guard against two overlapping attempts, and
+   *  must never outlive the attempt that set it, or nothing will ever retry. */
+  resuming = false;
+  resumeAttempts = 0;
+  lastPaint = 0;        // throttles progress repaints out of the send loop
+  resumeTimer = null;   // waiting for an answer to a query already sent
+  retryTimer = null;    // waiting out the backoff before the next attempt
+  resumePeerId = null;  // the session id the peer was last seen under
 
   constructor(direction, transferId, link) {
     this.direction = direction;
@@ -157,6 +180,7 @@ export class TransferManager extends Emitter {
     network.on('peer-available', (peer) => this.#retryFor(peer));
 
     setInterval(() => this.#reap(), 60_000);
+    setInterval(() => this.#refreshPaths(), PATH_REFRESH_INTERVAL);
   }
 
   #changed(transfer) { this.emit('change', transfer); }
@@ -348,7 +372,16 @@ export class TransferManager extends Emitter {
 
         channel.send(chunk);
         item.sent += chunk.byteLength;
-        this.#changed(transfer);
+
+        // Not on every chunk. `progress` prefers `confirmed` the moment the
+        // receiver's first report lands, so past that point a repaint per chunk
+        // redraws numbers that cannot have changed — thousands of full re-renders
+        // over a large file, on the same thread that is feeding the network.
+        const now = performance.now();
+        if (now - transfer.lastPaint > PROGRESS_INTERVAL) {
+          transfer.lastPaint = now;
+          this.#changed(transfer);
+        }
       }
     } catch (err) {
       checksum?.cancel();
@@ -372,13 +405,39 @@ export class TransferManager extends Emitter {
 
   /** Wait briefly for ICE to settle so the route label is real rather than
    *  "unknown", which is what an immediate call always returns. */
-  async #settledPath(link) {
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const path = await link.describePath();
-      if (path.kind !== 'unknown') return path;
-      await new Promise((resolve) => setTimeout(resolve, 150));
+  #settledPath(link) {
+    return link.refreshPath({ retries: 12 });
+  }
+
+  /**
+   * Keep the route each transfer reports honest.
+   *
+   * It used to be sampled once, as early as 150ms after the connection formed,
+   * and then frozen for the life of the transfer. Two things make that a lie:
+   * ICE carries on checking and can move the traffic to a better pair, and the
+   * first round-trip figure is measured during the handshake, when it is least
+   * representative. The visible symptom is two devices describing the same
+   * connection differently — one reading "local network · 118 ms", the other
+   * "internet route · 7 ms" — which is exactly when someone is trying to work out
+   * why a transfer is slow, and exactly when the number has to be trustworthy.
+   */
+  async #refreshPaths() {
+    const active = [...this.outgoing.values(), ...this.incoming.values()]
+      .filter((transfer) => !isTerminal(transfer.status) && transfer.status !== STATUS.waiting);
+    if (!active.length) return; // `getStats` is not free; do not poll an idle app
+
+    // One read per connection, however many transfers are riding on it.
+    const byLink = new Map();
+    for (const transfer of active) {
+      if (!byLink.has(transfer.link)) byLink.set(transfer.link, transfer.link.refreshPath());
     }
-    return link.describePath();
+
+    for (const transfer of active) {
+      const path = await byLink.get(transfer.link).catch(() => null);
+      if (!path || path.kind === 'unknown') continue;
+      transfer.path = path;
+      this.#changed(transfer);
+    }
   }
 
   async #explainSendFailure(transfer, err) {
@@ -533,6 +592,27 @@ export class TransferManager extends Emitter {
 
     transfer.chunkSize = msg.chunkSize;
 
+    // The sender states where it is resuming from, and until now nothing checked
+    // it. An existing writer can only append, so if the two disagree the bytes
+    // would land at the wrong offsets and the file would be quietly wrong — the
+    // one failure worth being loud about, because the checksum only catches it
+    // after the whole thing has been sent.
+    if (item.writer && msg.offset !== item.writer.offset) {
+      this.#activeByChannel.delete(channel);
+      transfer.link.send(channel, {
+        t: MSG.fileSkip,
+        transferId: transfer.id,
+        fileId: item.id,
+        reason: 'resume offset does not match',
+      });
+      item.status = STATUS.failed;
+      transfer.status = STATUS.failed;
+      transfer.detail = `${item.name} could not be resumed: the sender restarted at `
+        + `${fmtBytes(msg.offset)} but ${fmtBytes(item.writer.offset)} had already been written. Send it again.`;
+      this.#changed(transfer);
+      return;
+    }
+
     // Registered *before* the writer exists, and deliberately.
     //
     // The sender sends file-start and starts pushing chunks straight away — it
@@ -639,6 +719,19 @@ export class TransferManager extends Emitter {
     if (congested === transfer.askedPause) return;
     transfer.askedPause = congested;
     transfer.link.send(channel, { t: MSG.flow, transferId: transfer.id, pause: congested });
+    if (!congested) return;
+
+    // The resume cannot wait for the next chunk to arrive: this runs only when a
+    // chunk arrives, and we have just asked for there to be no more of them. What
+    // it waits on is storage draining, which is the thing that actually changed.
+    // Left to the old path it recovered only because the sender's buffer still
+    // had a backlog to push — and a pause that lands on an empty buffer stalls
+    // the transfer outright.
+    item.writer.throttle().then(() => {
+      if (!transfer.askedPause || isTerminal(transfer.status)) return;
+      transfer.askedPause = false;
+      transfer.link.send(transfer.channel, { t: MSG.flow, transferId: transfer.id, pause: false });
+    }, () => { /* the write failed; #writeChunk reports it */ });
   }
 
   #onFlow(msg) {
@@ -773,7 +866,14 @@ export class TransferManager extends Emitter {
     transfer.stalledAt = Date.now();
     transfer.detail = `Paused — ${why}. It will continue by itself if the device comes back.`;
     this.#changed(transfer);
-    this.#retryFor({ id: transfer.link.id, pubkey: transfer.peerKey });
+
+    // A channel that has just died takes any query sent over it with it, so an
+    // attempt that was in flight is over whether it knows it or not. Whether that
+    // counts against the backoff is the difference between a link that flaps and
+    // a tight loop of reconnect-and-die: if we had an attempt running, this is it
+    // failing, and it waits its turn.
+    if (transfer.resuming) this.#attemptFailed(transfer);
+    else this.#scheduleResume(transfer, 0);
   }
 
   /**
@@ -783,36 +883,101 @@ export class TransferManager extends Emitter {
    * new on every reconnect — the key is the only thing that says "this is the
    * same device".
    */
-  async #retryFor(peer) {
+  #retryFor(peer) {
     for (const transfer of this.outgoing.values()) {
       if (transfer.status !== STATUS.interrupted) continue;
-      // This runs both on interruption and again whenever the peer reappears, so
-      // two attempts can overlap. Without this guard both could reach
-      // `resume-query` and the file would be sent twice from two offsets.
-      if (transfer.resuming) continue;
 
       const sameDevice = (transfer.peerKey && peer.pubkey && transfer.peerKey === peer.pubkey)
-        || transfer.link.id === peer.id;
+        || transfer.link.id === peer.id
+        || transfer.resumePeerId === peer.id;
       if (!sameDevice) continue;
 
-      const link = this.#network.linkTo(peer.id);
-      if (!link) continue;
-      transfer.resuming = true;
-      transfer.link = link;
-      transfer.peerName = link.name;
-
-      try {
-        const channel = await link.ensureChannel({ timeout: 15_000, signal: transfer.abort.signal });
-        transfer.channel = channel;
-        channel.bufferedAmountLowThreshold = SEND_LOW_WATER;
-        transfer.detail = 'Reconnected — asking where to pick up…';
-        this.#changed(transfer);
-        link.send(channel, { t: MSG.resumeQuery, transferId: transfer.id });
-      } catch {
-        // Still unreachable. The next time it appears we will try again.
-        transfer.resuming = false;
-      }
+      // A device announcing itself is news, not another failed attempt. Drop
+      // whatever backoff we had reached and go now, under the id it just used.
+      transfer.resumePeerId = peer.id;
+      transfer.resumeAttempts = 0;
+      clearTimeout(transfer.retryTimer);
+      transfer.retryTimer = null;
+      this.#scheduleResume(transfer, 0);
     }
+  }
+
+  /**
+   * Line up the next resume attempt.
+   *
+   * Everything that could want a transfer to resume — the interruption itself, a
+   * peer reappearing, an attempt timing out — comes through here, and anything
+   * already in flight or already scheduled wins. That is what keeps overlapping
+   * triggers from sending two `resume-query` messages and streaming the same file
+   * from two offsets at once.
+   */
+  #scheduleResume(transfer, delay) {
+    if (transfer.resuming || transfer.retryTimer) return;
+    if (transfer.status !== STATUS.interrupted || transfer.abort.signal.aborted) return;
+
+    transfer.retryTimer = setTimeout(() => {
+      transfer.retryTimer = null;
+      this.#attemptResume(transfer);
+    }, delay);
+  }
+
+  async #attemptResume(transfer) {
+    if (transfer.status !== STATUS.interrupted || transfer.abort.signal.aborted) return;
+
+    // A failed RTCPeerConnection never recovers: a data channel opened on one
+    // stays 'connecting' until it times out, every time, forever. Renewing gives
+    // the retry something that can actually succeed.
+    const link = this.#network.renew(transfer.resumePeerId ?? transfer.link.id);
+    if (!link) return this.#attemptFailed(transfer);
+
+    transfer.resuming = true;
+    transfer.link = link;
+    transfer.peerName = link.name;
+
+    try {
+      const channel = await link.ensureChannel({ timeout: 15_000, signal: transfer.abort.signal });
+      if (transfer.status !== STATUS.interrupted) return this.#settleResume(transfer);
+
+      transfer.channel = channel;
+      channel.bufferedAmountLowThreshold = SEND_LOW_WATER;
+      transfer.detail = 'Reconnected — asking where to pick up…';
+      this.#changed(transfer);
+      link.send(channel, { t: MSG.resumeQuery, transferId: transfer.id });
+
+      // The query is out. If no answer comes back, that is not a reason to stop
+      // — it is a reason to ask again, which is the whole difference between a
+      // transfer that survives a flaky link and one that sits at "asking where to
+      // pick up" until it is reaped.
+      transfer.resumeTimer = setTimeout(() => this.#attemptFailed(transfer), RESUME_ANSWER_TIMEOUT);
+    } catch {
+      this.#attemptFailed(transfer); // still unreachable; back off and try again
+    }
+  }
+
+  /** One attempt is over without an answer. Back off, then have another go. */
+  #attemptFailed(transfer) {
+    this.#abandonAttempt(transfer);
+    if (transfer.status !== STATUS.interrupted || transfer.abort.signal.aborted) return;
+
+    const wait = Math.min(RESUME_RETRY_MAX, RESUME_RETRY_MIN * 2 ** transfer.resumeAttempts++);
+    transfer.detail = `Waiting for ${transfer.peerName} to come back — retrying…`;
+    this.#changed(transfer);
+    this.#scheduleResume(transfer, wait);
+  }
+
+  /** Forget an attempt that is in flight, without touching the backoff. */
+  #abandonAttempt(transfer) {
+    clearTimeout(transfer.resumeTimer);
+    transfer.resumeTimer = null;
+    transfer.resuming = false;
+  }
+
+  /** Stop the retry machinery altogether: answered, cancelled or given up on. */
+  #settleResume(transfer) {
+    this.#abandonAttempt(transfer);
+    clearTimeout(transfer.retryTimer);
+    transfer.retryTimer = null;
+    transfer.resumeAttempts = 0;
   }
 
   async #onResumeQuery(link, channel, msg) {
@@ -849,7 +1014,14 @@ export class TransferManager extends Emitter {
     // the transfer sat waiting for the other device to come back.
     transfer.markMoving();
     transfer.detail = `resuming at ${fmtBytes(item.received)}`;
-    this.#activeByChannel.set(channel, { transfer, item });
+    // The same shape `file-start` registers, and for the same reason: `#onBinary`
+    // reads `queue` and `queued` off whatever it finds here. A bare
+    // `{ transfer, item }` throws on the first chunk that arrives ahead of the
+    // sender's `file-start`, and the chunk is lost with nothing on screen.
+    // `ready` is true because this writer is already open and in position.
+    this.#activeByChannel.set(channel, {
+      transfer, item, queue: [], queued: 0, ready: true, opened: Promise.resolve(),
+    });
     this.#changed(transfer);
 
     link.send(channel, {
@@ -863,8 +1035,13 @@ export class TransferManager extends Emitter {
 
   async #onResumeFrom(msg) {
     const transfer = this.outgoing.get(msg.transferId);
-    if (!transfer || transfer.status !== STATUS.interrupted) return;
-    transfer.resuming = false;
+    if (!transfer) return;
+
+    // The answer we were waiting for, whatever we then decide to do with it. Stop
+    // the retry machinery before the early return below, or a transfer that has
+    // moved on would keep a timer running against it.
+    this.#settleResume(transfer);
+    if (transfer.status !== STATUS.interrupted) return;
 
     const item = transfer.items.find((candidate) => candidate.id === msg.fileId)
       ?? transfer.items.find((candidate) => candidate.status === STATUS.interrupted);
@@ -907,6 +1084,7 @@ export class TransferManager extends Emitter {
 
   cancel(transfer, reason = 'cancelled') {
     transfer.abort.abort();
+    this.#settleResume(transfer);
     transfer.flowGate?.resolve();
     transfer.verdict?.resolve(null);
     transfer.link.send(transfer.channel, { t: MSG.cancel, transferId: transfer.id, reason });
@@ -928,6 +1106,7 @@ export class TransferManager extends Emitter {
     if (!transfer || isTerminal(transfer.status)) return;
 
     transfer.abort.abort();
+    this.#settleResume(transfer);
     transfer.flowGate?.resolve();
     transfer.verdict?.resolve(null);
     transfer.status = STATUS.cancelled;
@@ -946,6 +1125,7 @@ export class TransferManager extends Emitter {
   }
 
   #fail(transfer, message) {
+    this.#settleResume(transfer);
     transfer.status = STATUS.failed;
     transfer.detail = message;
     transfer.endedAt = performance.now();
@@ -960,6 +1140,7 @@ export class TransferManager extends Emitter {
       for (const transfer of map.values()) {
         if (transfer.status !== STATUS.interrupted) continue;
         if (now - (transfer.stalledAt ?? now) < RESUME_KEEP_MS) continue;
+        this.#settleResume(transfer);
         transfer.status = STATUS.failed;
         transfer.detail = 'Gave up waiting for the other device to come back.';
         if (transfer.direction === 'in') {

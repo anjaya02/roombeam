@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "icons": "node tools/make-icons.mjs",
-    "check": "node tools/check.mjs && node tools/check-signaling.mjs && node tools/check-browser.mjs",
-    "check:unit": "node tools/check.mjs",
+    "check": "node tools/check.mjs && node tools/check-resume.mjs && node tools/check-signaling.mjs && node tools/check-browser.mjs",
+    "check:unit": "node tools/check.mjs && node tools/check-resume.mjs",
     "check:e2e": "node tools/check-browser.mjs"
   },
   "dependencies": {
