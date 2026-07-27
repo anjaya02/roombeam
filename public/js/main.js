@@ -6,7 +6,7 @@ import { Signaling } from './signaling.js';
 import { PeerNetwork } from './peer.js';
 import { TransferManager, isTerminal } from './transfer.js';
 import { UI } from './ui.js';
-import { canScan, codeFromUrl, scanForCode } from './scan.js';
+import { canScan, codeFromUrl, probeScanner, scanForCode } from './scan.js';
 import { capabilityRows, linkSummary, loopbackBenchmark } from './diagnostics.js';
 import { probeSyncAccess, sweepOpfs } from './writers.js';
 
@@ -244,7 +244,9 @@ async function startScan() {
   openDialog('#scan-dialog');
 
   try {
-    const code = await scanForCode($('#scan-video'), scanAbort.signal);
+    const code = await scanForCode($('#scan-video'), scanAbort.signal, (text) => {
+      status.textContent = text;
+    });
     closeDialog('#scan-dialog');
     signaling.joinRoom('code', code);
     ui.toast(`Joining ${code}.`);
@@ -361,6 +363,10 @@ async function start() {
     await probeSyncAccess();
     refreshDiagnostics();
   });
+
+  // Whether this device can decode a QR is not knowable from the interface being
+  // present, so it is settled before the first paint decides to offer the button.
+  probeScanner().then(paintRoom);
 
   // Learn the ICE servers (including any TURN relay) before the first
   // connection forms, so a cross-network peer has a relay to fall back on from
