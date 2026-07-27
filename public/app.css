@@ -182,11 +182,13 @@ footer p { color: var(--muted); font-size: 0.8rem; }
   width: 9.5rem;
   height: 9.5rem;
   flex: none;
-  background: #fff;
   border-radius: 8px;
   padding: 0.35rem;
   border: 1px solid var(--line);
 }
+/* Stay transparent until the QR is actually in place, so an empty box never
+   flashes white before the code has been drawn. */
+.qr:has(svg) { background: #fff; }
 .qr svg { display: block; width: 100%; height: 100%; }
 
 .share-text { display: grid; gap: 0.45rem; min-width: 12rem; flex: 1; }
@@ -271,8 +273,20 @@ footer p { color: var(--muted); font-size: 0.8rem; }
 .tx[data-status="failed"] { border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
 .tx[data-status="done"] { border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); }
 
-.tx-head { display: flex; align-items: baseline; gap: 0.6rem; }
-.tx-title { font-weight: 550; overflow-wrap: anywhere; min-width: 0; }
+.tx-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.tx-title {
+  font-weight: 550;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  /* Cap a long media filename at two lines with an ellipsis, so it never
+     collapses into a tall single-character column on a narrow phone. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .tx-dir { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
 .tx-meta {
   margin-left: auto;
