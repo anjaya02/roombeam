@@ -119,6 +119,49 @@ Then send exactly as above. **Back to nearby** returns you to automatic grouping
 > projector and everyone joins the same room, regardless of how the network is
 > arranged.
 
+## No Wi-Fi worth trusting: use a hotspot
+
+Apps like SHAREit make their own network — the sender becomes a Wi-Fi hotspot and
+the receiver joins it. A web page cannot do that: there is no browser API to
+create a hotspot or to join a network, and there is unlikely ever to be one. That
+is the actual price of not having to install anything.
+
+You can build the same arrangement by hand in about thirty seconds, and it is the
+one setup that always works, because two devices on a hotspot are on the same
+network by construction:
+
+1. Turn on the hotspot on one phone.
+2. Join it from the other device.
+3. Open RoomBeam on both.
+
+Transfers then run over the hotspot at local speed — the route line will say
+**local network**, and you can check it rather than take our word for it.
+
+### With no internet at all
+
+The hotspot alone still needs a working internet connection, because the two
+devices have to be introduced to each other before they can connect directly. If
+the phone providing the hotspot has mobile data, that is taken care of.
+
+If it does not — a plane, a basement, a field trip, a country with no roaming —
+run the introduction service yourself. It is the same `npm start` from the top of
+this guide, on a laptop joined to the hotspot:
+
+1. Turn on the phone's hotspot. Mobile data can stay off.
+2. Join it from the laptop.
+3. `npm start` on the laptop.
+4. Open the `Other devices:` address it prints, on every phone.
+
+Nothing leaves the hotspot at any point — not the file, not the filenames, and
+not the introduction either. You will have to
+[get past the certificate warning](#get-past-the-certificate-warning) once per
+device, which is the whole cost.
+
+> Hotspots usually cap out lower than a good access point, and the phone
+> providing one is doing two jobs at once. Expect it to be slower than a proper
+> 5 GHz network — it is the arrangement for when there is no proper network, not
+> a faster one.
+
 ## Where the file ends up
 
 This depends on the browser, and it decides the **largest file the device can
@@ -213,7 +256,9 @@ Wi-Fi: the access point deliberately forbids devices from talking to each other.
 Nothing in a browser can work around it.
 
 Confirm it in a minute: turn on a phone hotspot, put both devices on it, and try
-again. If it works there, the original network was the problem.
+again. If it works there, the original network was the problem. See
+[No Wi-Fi worth trusting](#no-wi-fi-worth-trusting-use-a-hotspot) for the full
+arrangement.
 
 ### The connection fails with something else
 

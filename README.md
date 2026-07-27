@@ -30,6 +30,13 @@ Open the first on this machine and the second on your phone, or create a room co
 and scan the QR. **Both devices need to be on the same Wi-Fi** for the transfer to
 stay local.
 
+No usable Wi-Fi, or one that stops devices seeing each other? Turn on a phone's
+hotspot and put both devices on it — that is the same arrangement an installed
+app builds for itself, and a browser cannot make one on your behalf. With the
+server above running on a laptop joined to that hotspot, the whole thing works
+with no internet at all. See
+[No Wi-Fi worth trusting](GUIDE.md#no-wi-fi-worth-trusting-use-a-hotspot).
+
 ### The certificate warning is expected
 
 Every device objects once, because the certificate is generated on first run and

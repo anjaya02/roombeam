@@ -253,6 +253,8 @@ footer p { color: var(--muted); font-size: 0.8rem; }
   border: 1px dashed var(--line);
   border-radius: var(--radius);
 }
+.empty p + p { margin-top: 0.5rem; }
+.empty .sub { font-size: 0.84rem; opacity: 0.85; }
 
 .badge {
   display: inline-flex;

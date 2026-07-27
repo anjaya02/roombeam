@@ -567,6 +567,21 @@ try {
   console.log(`        without storage: ${discardResult.split(' | ')[0]}`);
   console.log('        Only the writer changed, so the difference is the storage cost.\n');
 
+  // Last, because it deliberately strands a tab on its own. An empty device list
+  // is where someone whose devices cannot see each other actually sits, so it is
+  // the one place the way out has to be written down.
+  const emptyState = await receiver.eval(`
+    document.querySelector('#room-actions .btn').click();
+    return true;
+  `) && await receiver.waitFor(`
+    const box = document.querySelector('#peers .empty');
+    return box && /no other devices/i.test(box.textContent) ? box.textContent : false;
+  `, 12_000, 'the empty device list');
+
+  check('an empty device list says what to do about it', () => {
+    ok(/hotspot/i.test(emptyState), `no way out offered: ${emptyState}`);
+  });
+
   check('nothing logged an error along the way', () => {
     strictEqual(sender.errors.length, 0, `sender: ${sender.errors.join(' | ')}`);
     strictEqual(receiver.errors.length, 0, `receiver: ${receiver.errors.join(' | ')}`);

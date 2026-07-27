@@ -133,10 +133,22 @@ export class UI {
     $('#send-all').hidden = !peers.length;
 
     if (!peers.length) {
-      box.replaceChildren(el('div', {
-        class: 'empty',
-        text: 'No other devices yet. Open this same page on another device on the same Wi-Fi, or share a room code.',
-      }));
+      // The hotspot line earns its place here rather than only in the failure
+      // diagnosis. Waiting at an empty list is where someone on a different
+      // network actually is, and by the time a connection has failed they have
+      // usually given up. It is also the one arrangement that always works: two
+      // devices on a phone's hotspot are on the same network by construction,
+      // which is precisely what an install-first app builds for itself.
+      box.replaceChildren(
+        el('div', { class: 'empty' }, [
+          el('p', { text: 'No other devices yet. Open this same page on another device on the same Wi-Fi, or share a room code.' }),
+          el('p', {
+            class: 'sub',
+            text: 'On different networks, or the Wi-Fi blocks devices from seeing each other? '
+              + "Turn on one phone's hotspot and put both devices on it.",
+          }),
+        ]),
+      );
       return;
     }
 
