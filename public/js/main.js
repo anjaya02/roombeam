@@ -232,6 +232,16 @@ $('#copy-link').addEventListener('click', async () => {
 
 $('#leave-room').addEventListener('click', () => signaling.joinRoom('network'));
 
+// The wordmark is a real link, so it can be opened in a new tab or copied. A
+// plain click navigates in place instead: reloading the page would abandon a
+// transfer that is in flight, and leaving the room does not — the connection to
+// a peer outlives the room it was made in.
+$('#home-link').addEventListener('click', (event) => {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  signaling.joinRoom('network');
+});
+
 // ── QR scanning ──────────────────────────────────────────────────────────────
 
 let scanAbort = null;

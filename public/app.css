@@ -67,6 +67,9 @@ p { margin: 0; }
 }
 
 .bar h1 { font-size: 1.05rem; display: flex; align-items: baseline; gap: 0.55rem; flex-wrap: wrap; }
+.bar h1 a { color: inherit; text-decoration: none; }
+.bar h1 a:hover { text-decoration: underline; }
+.bar h1 a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 .bar .tag { font-size: 0.78rem; font-weight: 400; color: var(--muted); }
 
 .conn { margin-left: auto; display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted); }
