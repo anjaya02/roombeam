@@ -34,6 +34,11 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must win over any element's own display rule. Without
+   this, `.share { display: flex }` and the like keep an element on screen even
+   after it is hidden in script. */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
