@@ -85,7 +85,19 @@ class Clock {
     };
   }
 
-  restore() { Object.assign(globalThis, this.#real); }
+  restore() {
+    Object.assign(globalThis, this.#real);
+    if (this.#realNow) Date.now = this.#realNow;
+  }
+
+  /** Wall-clock too, for code that measures silence rather than sets a timer. */
+  installDate(epoch = 1_700_000_000_000) {
+    this.#realNow = Date.now;
+    this.epoch = epoch;
+    Date.now = () => this.epoch + this.now;
+  }
+
+  #realNow = null;
 
   /** Run every timer due within `ms`, in order, flushing microtasks between. */
   async advance(ms) {
@@ -406,6 +418,146 @@ await test('an idle app does not poll getStats', async () => {
     const reads = link.pathReads;
     await clock.advance(30_000);
     strictEqual(link.pathReads, reads, 'nothing is running; the route should not be read');
+  } finally {
+    clock.restore();
+  }
+});
+
+// ── a peer that has forgotten the transfer ───────────────────────────────────
+
+await test('a file-start for an unknown transfer is refused, not silently dropped', async () => {
+  const clock = new Clock();
+  clock.install();
+  try {
+    const link = fakeLink('session-1');
+    const transfers = new TransferManager(fakeNetwork(link));
+    void transfers;
+
+    // What the sender does after being told to start over, against a tab that
+    // was reloaded or discarded while it was in the background.
+    link.fire('control', link.channel, {
+      t: 'file-start', transferId: 'gone', fileId: 'f1', chunkSize: 16384, offset: 0,
+    });
+    await flush();
+
+    const reply = link.sent.find((msg) => msg.t === 'cancel');
+    ok(reply, 'the sender must be told; otherwise it streams the whole file into nothing '
+      + 'and then reports it delivered');
+    strictEqual(reply.transferId, 'gone');
+  } finally {
+    clock.restore();
+  }
+});
+
+// ── the signalling socket's own liveness ─────────────────────────────────────
+//
+// The failure this pins down: a phone frozen in the background stops sending
+// keepalives, the server drops it after 90s, and the close never reaches a
+// frozen tab — or a radio that changed networks never delivers it. The tab wakes
+// up with readyState still OPEN, so it never rejoins, never re-announces, and
+// the device waiting to send to it waits for a peer the server has forgotten.
+
+class FakeSocket {
+  static OPEN = 1;
+  static instances = [];
+
+  readyState = 0;
+  sent = [];
+
+  constructor(url) {
+    this.url = url;
+    FakeSocket.instances.push(this);
+  }
+
+  /** The server accepting the connection. */
+  accept() { this.readyState = FakeSocket.OPEN; this.onopen?.(); }
+  deliver(msg) { this.onmessage?.({ data: JSON.stringify(msg) }); }
+  send(data) { this.sent.push(JSON.parse(data)); }
+  close() { this.readyState = 3; this.onclose?.(); }
+}
+
+const listeners = new Map();
+const fakeDocument = {
+  visibilityState: 'visible',
+  addEventListener(event, fn) {
+    if (!listeners.has(event)) listeners.set(event, []);
+    listeners.get(event).push(fn);
+  },
+};
+
+globalThis.WebSocket = FakeSocket;
+globalThis.document = fakeDocument;
+globalThis.location = { protocol: 'https:', host: 'roombeam.test' };
+globalThis.addEventListener ??= () => {};
+
+const { Signaling } = await import('../public/js/signaling.js');
+
+/** A connected Signaling with one live socket, on a clock the test controls. */
+async function connected(clock) {
+  FakeSocket.instances.length = 0;
+  const signaling = new Signaling(() => ({ name: 'Tester', pubkey: 'k' }));
+  signaling.connect(true);
+  const socket = FakeSocket.instances[0];
+  socket.accept();
+  socket.deliver({ t: 'welcome', id: 'sess-1', room: { kind: 'network', code: null, size: 1 }, peers: [] });
+  await flush();
+  return { signaling, socket };
+}
+
+await test('a socket that stops answering is replaced, not pinged forever', async () => {
+  const clock = new Clock();
+  clock.install();
+  clock.installDate();
+  try {
+    const { socket } = await connected(clock);
+    strictEqual(FakeSocket.instances.length, 1);
+
+    // The server has dropped us and the close never arrived: still OPEN here,
+    // carrying nothing. Pings go out and nothing comes back.
+    await clock.advance(90_000);
+
+    ok(socket.sent.some((msg) => msg.t === 'ping'), 'it should have tried pinging first');
+    strictEqual(FakeSocket.instances.length, 2, 'the dead socket should have been replaced');
+  } finally {
+    clock.restore();
+  }
+});
+
+await test('a socket that keeps answering is left alone', async () => {
+  const clock = new Clock();
+  clock.install();
+  clock.installDate();
+  try {
+    const { socket } = await connected(clock);
+    // Answer every ping, as a healthy server does.
+    socket.send = (data) => {
+      socket.sent.push(JSON.parse(data));
+      queueMicrotask(() => socket.deliver({ t: 'pong' }));
+    };
+
+    await clock.advance(300_000);
+    strictEqual(FakeSocket.instances.length, 1, 'a healthy socket must not be churned');
+  } finally {
+    clock.restore();
+  }
+});
+
+await test('returning to the foreground proves the socket rather than trusting it', async () => {
+  const clock = new Clock();
+  clock.install();
+  clock.installDate();
+  try {
+    const { socket } = await connected(clock);
+    const before = socket.sent.length;
+
+    // Back from another app. readyState still says OPEN, so the old check —
+    // "reconnect only if not connected" — did nothing at all here.
+    for (const fn of listeners.get('visibilitychange') ?? []) fn();
+    await flush();
+
+    ok(socket.sent.length > before, 'it should ask outright instead of assuming');
+    await clock.advance(6_000);
+    strictEqual(FakeSocket.instances.length, 2, 'no answer means the socket is gone');
   } finally {
     clock.restore();
   }

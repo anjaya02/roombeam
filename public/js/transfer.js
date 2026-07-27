@@ -463,7 +463,7 @@ export class TransferManager extends Emitter {
       case MSG.offerFiles: return this.#onOffer(link, channel, msg);
       case MSG.accept: return this.#onAccept(msg);
       case MSG.decline: return this.#onDecline(msg);
-      case MSG.fileStart: return this.#onFileStart(channel, msg);
+      case MSG.fileStart: return this.#onFileStart(link, channel, msg);
       case MSG.fileEnd: return this.#onFileEnd(channel, msg);
       case MSG.progress: return this.#onProgress(msg);
       case MSG.flow: return this.#onFlow(msg);
@@ -582,9 +582,21 @@ export class TransferManager extends Emitter {
     this.#changed(transfer);
   }
 
-  async #onFileStart(channel, msg) {
+  async #onFileStart(link, channel, msg) {
     const transfer = this.incoming.get(msg.transferId);
-    if (!transfer) return;
+    if (!transfer) {
+      // No memory of this transfer — the tab was reloaded, or the phone was
+      // discarded in the background and came back fresh. Staying quiet meant
+      // every chunk that followed was dropped on the floor while the sender
+      // streamed the entire file and then reported it delivered.
+      link.send(channel, {
+        t: MSG.cancel,
+        transferId: msg.transferId,
+        fileId: msg.fileId,
+        reason: 'this device no longer has that transfer — send it again',
+      });
+      return;
+    }
     transfer.channel = channel;
 
     const item = transfer.items.find((candidate) => candidate.id === msg.fileId);

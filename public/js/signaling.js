@@ -11,13 +11,31 @@ const PING_INTERVAL = 25_000;   // comfortably inside the 60s idle cutoff most h
 const BACKOFF_MIN = 800;
 const BACKOFF_MAX = 15_000;
 
+// A socket can be open in this tab and long gone on the wire. The server drops
+// peers it has not heard from for 90s, and a phone frozen in the background
+// stops sending keepalives well before that — but the close never reaches a
+// frozen tab, and a radio that changed networks may never deliver it at all. So
+// the tab wakes up believing it is still in the room: it does not re-announce,
+// the other device never learns it is back, and a transfer waits for a peer that
+// is, as far as the server is concerned, gone.
+//
+// The server checks that it can still hear us. These do the same in the other
+// direction.
+const SILENCE_LIMIT = 60_000;   // nothing at all from the server: assume the socket is dead
+const PONG_TIMEOUT = 5_000;     // after asking outright, on returning to the foreground
+
 export class Signaling extends Emitter {
   /** @type {WebSocket|null} */
   #ws = null;
   #pingTimer = null;
   #retryTimer = null;
+  #proveTimer = null;
   #attempts = 0;
   #closedByUs = false;
+  /** When the server was last heard from. Any message counts as proof of life. */
+  #lastHeard = 0;
+  /** True between asking the server to prove it is there and hearing anything. */
+  #awaitingProof = false;
 
   /** Session id assigned by the server. Changes on every reconnect. */
   id = null;
@@ -35,7 +53,20 @@ export class Signaling extends Emitter {
     // Coming back to a backgrounded tab should feel instant rather than waiting
     // out whatever backoff we had reached.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && !this.connected) this.connect(true);
+      if (document.visibilityState !== 'visible') return;
+      if (!this.connected) return this.connect(true);
+
+      // Open is not the same as alive, and returning from the background is
+      // exactly when the difference bites. Ask outright rather than waiting a
+      // whole ping interval to find out. A flag rather than comparing timestamps:
+      // the question is "did anything answer", which no arithmetic against the
+      // delay we just waited can express without a boundary to get wrong.
+      this.#awaitingProof = true;
+      this.#send({ t: 'ping' });
+      clearTimeout(this.#proveTimer);
+      this.#proveTimer = setTimeout(() => {
+        if (this.#awaitingProof) this.#reconnectNow();
+      }, PONG_TIMEOUT);
     });
     addEventListener('online', () => { if (!this.connected) this.connect(true); });
   }
@@ -66,13 +97,23 @@ export class Signaling extends Emitter {
 
     ws.onopen = () => {
       this.#attempts = 0;
+      this.#lastHeard = Date.now();
+      this.#awaitingProof = false;
       this.emit('status', 'connecting');
       this.#send({ t: 'join', ...this.#intent, ...this.#describe() });
       clearInterval(this.#pingTimer);
-      this.#pingTimer = setInterval(() => this.#send({ t: 'ping' }), PING_INTERVAL);
+      this.#pingTimer = setInterval(() => {
+        // Two pings in a row with nothing back means this socket is not carrying
+        // anything, whatever its readyState claims. Replace it rather than going
+        // on pinging into it.
+        if (Date.now() - this.#lastHeard > SILENCE_LIMIT) return this.#reconnectNow();
+        this.#send({ t: 'ping' });
+      }, PING_INTERVAL);
     };
 
     ws.onmessage = (event) => {
+      this.#lastHeard = Date.now();
+      this.#awaitingProof = false;
       let msg;
       try { msg = JSON.parse(event.data); } catch { return; }
 
@@ -106,13 +147,39 @@ export class Signaling extends Emitter {
 
     ws.onclose = () => {
       clearInterval(this.#pingTimer);
-      if (this.#ws === ws) this.#ws = null;
+      clearTimeout(this.#proveTimer);
+      // A socket we already replaced must not clear the live one's session id or
+      // schedule a retry against it.
+      if (this.#ws !== ws) return;
+      this.#ws = null;
       this.id = null;
       this.emit('status', 'closed');
       if (!this.#closedByUs) this.#scheduleRetry();
     };
 
     ws.onerror = () => { /* onclose always follows; nothing useful to add here */ };
+  }
+
+  /**
+   * Throw away a socket that has stopped carrying anything and start again.
+   *
+   * The old one is detached before it is closed: its `close` event arrives after
+   * the replacement is already up, and left attached it would clear the new
+   * session id and schedule a retry against a connection that is fine.
+   */
+  #reconnectNow() {
+    const dead = this.#ws;
+    this.#awaitingProof = false;
+    clearInterval(this.#pingTimer);
+    clearTimeout(this.#proveTimer);
+    this.#ws = null;
+    this.id = null;
+    if (dead) {
+      dead.onopen = dead.onmessage = dead.onclose = dead.onerror = null;
+      try { dead.close(); } catch { /* already gone */ }
+    }
+    this.emit('status', 'closed');
+    this.connect(true);
   }
 
   /** Once the server has told us which room we are in, that is what we rejoin. */
@@ -147,6 +214,7 @@ export class Signaling extends Emitter {
     this.#closedByUs = true;
     clearInterval(this.#pingTimer);
     clearTimeout(this.#retryTimer);
+    clearTimeout(this.#proveTimer);
     this.#ws?.close();
     this.#ws = null;
   }
