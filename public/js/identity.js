@@ -21,15 +21,28 @@ const KNOWN_KEY = 'roombeam.known';
 const DB_NAME = 'roombeam';
 const DB_STORE = 'identity';
 
+// Two disjoint lists — no word is in both, so a name is never "Cedar Cedar" —
+// giving 60 × 60 = 3600 combinations. Enough that a room full of devices rarely
+// lands on the same name twice by chance.
 const ADJECTIVES = [
   'Quiet', 'Brass', 'Amber', 'Swift', 'Copper', 'Violet', 'Iron', 'Clever',
   'Tidal', 'Dusty', 'Golden', 'Hollow', 'Northern', 'Patient', 'Silver',
-  'Wandering', 'Bright', 'Cedar', 'Frosted', 'Restless',
+  'Wandering', 'Bright', 'Frosted', 'Restless', 'Gentle', 'Bold', 'Cosmic',
+  'Crimson', 'Emerald', 'Jade', 'Lively', 'Lunar', 'Marble', 'Mellow', 'Misty',
+  'Nimble', 'Noble', 'Opal', 'Pearl', 'Rustic', 'Sable', 'Scarlet', 'Shadow',
+  'Solar', 'Stormy', 'Sunny', 'Teal', 'Timber', 'Velvet', 'Verdant', 'Wild',
+  'Winter', 'Autumn', 'Azure', 'Cobalt', 'Dawn', 'Dewy', 'Fabled', 'Ivory',
+  'Radiant', 'Rugged', 'Serene', 'Twilight', 'Woven', 'Zephyr',
 ];
 const NOUNS = [
   'Otter', 'Kettle', 'Falcon', 'Lantern', 'Harbour', 'Cedar', 'Comet', 'Meadow',
   'Anchor', 'Sparrow', 'Beacon', 'Compass', 'Ferry', 'Juniper', 'Kestrel',
-  'Orchard', 'Pebble', 'Thistle', 'Willow', 'Foxglove',
+  'Orchard', 'Pebble', 'Thistle', 'Willow', 'Foxglove', 'Badger', 'Bison',
+  'Brook', 'Canyon', 'Cove', 'Crane', 'Dune', 'Eagle', 'Fern', 'Fjord',
+  'Glacier', 'Grove', 'Heron', 'Ibis', 'Island', 'Lark', 'Lynx', 'Marsh',
+  'Marten', 'Nectar', 'Oak', 'Onyx', 'Osprey', 'Petrel', 'Pine', 'Quartz',
+  'Raven', 'Reef', 'Ridge', 'River', 'Robin', 'Summit', 'Tundra', 'Valley',
+  'Vixen', 'Walrus', 'Wren', 'Yarrow', 'Aspen', 'Lagoon',
 ];
 
 const pick = (list) => list[crypto.getRandomValues(new Uint32Array(1))[0] % list.length];
