@@ -241,7 +241,11 @@ export class UI {
       actions,
     ]);
 
-    return { root, dir, title, meta, fill, note, files, actions };
+    // actionsKey and filesKey record what the children currently represent, so a
+    // repaint that changes nothing leaves the nodes — and anything the user is
+    // mid-click on — alone. fileStates maps a file id to the node showing its
+    // byte count, which is updated in place.
+    return { root, dir, title, meta, fill, note, files, actions, actionsKey: '', filesKey: '', fileStates: null };
   }
 
   #updateTransferRow(row, transfer) {
@@ -313,56 +317,88 @@ export class UI {
     const anySavable = transfer.items.some((item) => item.blob);
 
     if (!many && !anySavable) {
-      row.files.replaceChildren();
-      row.files.hidden = true;
+      if (row.filesKey !== 'none') {
+        row.filesKey = 'none';
+        row.fileStates = null;
+        row.files.replaceChildren();
+        row.files.hidden = true;
+      }
       return;
     }
-    row.files.hidden = false;
 
-    const nodes = transfer.items.map((item) => {
-      const line = el('li');
-      const name = el('span', { class: 'fn', text: item.name });
-      line.append(name);
+    // Structure is rebuilt only when it changes; the byte counts, which change
+    // constantly, are written into the nodes already on the page. Same reason as
+    // the action buttons — Save is a link someone has to be able to press, and
+    // this row is redrawn whenever *any* transfer changes, so rebuilding it
+    // unconditionally pulls that link out from under them for as long as
+    // something else is still running.
+    const key = transfer.items.map((item) => `${item.id}:${item.blob ? 1 : 0}`).join('|');
+    if (row.filesKey !== key) {
+      row.filesKey = key;
+      row.fileStates = new Map();
 
-      // The extension the operating system will act on, not the one the name
-      // suggests. This is the visible half of the spoofing mitigation.
-      if (transfer.direction === 'in' && isExecutable(item.name)) {
-        line.append(badge(`.${trueExtension(item.name)} runs code`, 'warn',
-          'This file type executes when opened. Only continue if you know what it is.'));
-      }
+      const nodes = transfer.items.map((item) => {
+        const line = el('li');
+        const name = el('span', { class: 'fn', text: item.name });
+        line.append(name);
 
-      if (item.blob) {
-        // Created once and cached on the item. This row is redrawn whenever any
-        // transfer changes, so minting a fresh object URL here would leak one per
-        // repaint — and each one pins the whole received file.
-        item.objectUrl ??= URL.createObjectURL(item.blob);
-        line.append(el('a', {
-          class: 'save-link',
-          href: item.objectUrl,
-          download: item.name,
-          text: 'Save',
-          onclick: () => this.#handlers.savedFile(item),
-        }));
-      }
+        // The extension the operating system will act on, not the one the name
+        // suggests. This is the visible half of the spoofing mitigation.
+        if (transfer.direction === 'in' && isExecutable(item.name)) {
+          line.append(badge(`.${trueExtension(item.name)} runs code`, 'warn',
+            'This file type executes when opened. Only continue if you know what it is.'));
+        }
 
-      const state = item.status === STATUS.done
-        ? fmtBytes(item.size)
-        : item.status === STATUS.failed
-          ? (item.skipReason || 'failed')
-          : item.status === STATUS.declined
-            ? 'skipped'
-            : `${fmtBytes(item.progress)} / ${fmtBytes(item.size)}`;
-      line.append(el('span', { class: 'fm', text: state }));
-      return line;
-    });
+        if (item.blob) {
+          // Created once and cached on the item. Minting a fresh object URL per
+          // rebuild would leak one each time, and each one pins the whole file.
+          item.objectUrl ??= URL.createObjectURL(item.blob);
+          line.append(el('a', {
+            class: 'save-link',
+            href: item.objectUrl,
+            download: item.name,
+            text: 'Save',
+            onclick: () => this.#handlers.savedFile(item),
+          }));
+        }
 
-    row.files.replaceChildren(...nodes);
+        const state = el('span', { class: 'fm' });
+        row.fileStates.set(item.id, state);
+        line.append(state);
+        return line;
+      });
+
+      row.files.hidden = false;
+      row.files.replaceChildren(...nodes);
+    }
+
+    for (const item of transfer.items) {
+      const node = row.fileStates.get(item.id);
+      if (node) node.textContent = fileStateText(item);
+    }
   }
 
+  /**
+   * The buttons under a transfer.
+   *
+   * Rebuilt only when the set of them actually changes. This runs on every
+   * repaint, and while bytes are moving a repaint lands every few frames — so
+   * replacing the nodes unconditionally destroys the button under the pointer
+   * between mousedown and mouseup. The click never completes, and Cancel appears
+   * simply not to work. The handlers close over `transfer`, and a row is bound to
+   * one transfer for its whole life, so keeping the nodes keeps them correct.
+   */
   #updateActions(row, transfer) {
+    const offering = transfer.direction === 'in' && transfer.status === STATUS.waiting;
+    const key = offering
+      ? `offer:${transfer.items.some((item) => isExecutable(item.name))}`
+      : isTerminal(transfer.status) ? 'none' : 'cancel';
+    if (row.actionsKey === key) return;
+    row.actionsKey = key;
+
     const buttons = [];
 
-    if (transfer.direction === 'in' && transfer.status === STATUS.waiting) {
+    if (offering) {
       const executables = transfer.items.filter((item) => isExecutable(item.name));
       if (executables.length) {
         buttons.push(el('span', { class: 'sub' }, [
@@ -440,4 +476,12 @@ export class UI {
 
 function badge(text, tone = '', title = '') {
   return el('span', { class: `badge ${tone}`, text, title: title || false });
+}
+
+/** The right-hand figure on one file's line. */
+function fileStateText(item) {
+  if (item.status === STATUS.done) return fmtBytes(item.size);
+  if (item.status === STATUS.failed) return item.skipReason || 'failed';
+  if (item.status === STATUS.declined) return 'skipped';
+  return `${fmtBytes(item.progress)} / ${fmtBytes(item.size)}`;
 }

@@ -295,6 +295,30 @@ try {
     return true;
   `);
 
+  // Cancel is a node someone has to be able to press while bytes are moving, and
+  // the row it lives in repaints several times a second. Rebuilt on every
+  // repaint, it is destroyed between mousedown and mouseup and the click never
+  // lands — the button looks broken and nothing explains why. Tag the live node,
+  // let several repaints go by, and see whether the tag survived.
+  await receiver.waitFor(
+    `[...document.querySelectorAll('#transfers .tx .btn')].some(b => b.textContent === 'Cancel')`,
+    10_000, 'the Cancel button to appear');
+
+  const cancelNode = await receiver.eval(`
+    return (async () => {
+      const find = () => [...document.querySelectorAll('#transfers .tx .btn')]
+        .find((b) => b.textContent === 'Cancel');
+      find().dataset.probe = 'tagged';
+      await new Promise((r) => setTimeout(r, 600));
+      const after = find();
+      if (!after) return 'gone: ' + document.querySelector('#transfers .tx')?.dataset.status;
+      return after.dataset.probe === 'tagged' ? 'same node' : 'rebuilt on every repaint';
+    })();
+  `, { awaitPromise: true });
+
+  check('the Cancel button survives repaints, so it can actually be clicked', () =>
+    strictEqual(cancelNode, 'same node'));
+
   await receiver.waitFor(
     `document.querySelector('#transfers .tx')?.dataset.status === 'done'`, 60_000, 'the receiver to finish');
   await sender.waitFor(
@@ -444,6 +468,42 @@ try {
     12_000, 'the room line to count the new arrival');
   check('the room line counts arrivals as they happen', () =>
     ok(roomLine.startsWith('2 devices'), roomLine));
+
+  // The wordmark goes home. It is a real link so it can be opened in a new tab,
+  // but a plain click must not reload — a reload would abandon a transfer in
+  // flight, which is exactly when someone might click it by accident.
+  const home = await receiver.eval(`
+    return (async () => {
+      const link = document.querySelector('#home-link');
+      if (!link) return 'no #home-link in the header';
+      if (!link.getAttribute('href')) return 'not a real link';
+      window.__stayed = true; // a reload would wipe this
+      link.click();
+      await new Promise((r) => setTimeout(r, 1500));
+      return {
+        stayed: window.__stayed === true,
+        hash: location.hash,
+        room: document.querySelector('#room-what')?.textContent ?? '',
+      };
+    })();
+  `, { awaitPromise: true });
+
+  check('the wordmark returns to the home room without reloading the page', () => {
+    ok(typeof home === 'object', String(home));
+    ok(home.stayed, 'the page reloaded, which would abandon a running transfer');
+    strictEqual(home.hash, '', `the room code should be off the address bar, got "${home.hash}"`);
+    ok(/network address/i.test(home.room), `still in a code room: ${home.room}`);
+  });
+
+  // Going home genuinely left the room, so put the receiver back where the rest
+  // of the run expects to find it.
+  await receiver.eval(`
+    location.hash = '#/r/' + ${JSON.stringify(code.replace('-', ''))};
+    return true;
+  `);
+  await receiver.waitFor(
+    `document.querySelector('#room-code')?.textContent.replace('-','').length === 5`,
+    12_000, 'the receiver to rejoin the code room');
 
   // ── the measurement §14 asks for ───────────────────────────────────────────
   //
