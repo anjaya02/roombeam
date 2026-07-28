@@ -28,6 +28,7 @@ export const MSG = {
   cancel: 'cancel',
   resumeQuery: 'resume-query',
   resumeFrom: 'resume-from',
+  text: 'text',
 };
 
 const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 64;
@@ -47,6 +48,10 @@ const isChunkSize = (v) => Number.isSafeInteger(v) && v >= 1024 && v <= 16 * 102
 /** Absolute ceiling on one offer. Not a policy — a guard against a peer
  *  announcing four million files and making the receiver render them. */
 export const MAX_FILES_PER_TRANSFER = 500;
+
+/** Longest text message we will carry. A link or a short note, not a document —
+ *  and a bound so a peer cannot push an arbitrarily large string onto the page. */
+export const MAX_MESSAGE_LEN = 2000;
 
 /**
  * Turn raw channel data into a trusted message, or null.
@@ -159,6 +164,17 @@ export function parseControl(raw) {
         available: msg.available === true,
         offset: isSize(msg.offset) ? msg.offset : 0,
       };
+
+    case MSG.text: {
+      // A short note or a URL. The body is sanitised here, at the boundary — the
+      // same treatment device names and filenames get — so control characters and
+      // bidi overrides are gone before anything downstream renders it. An empty
+      // result (a body that was nothing but stripped characters) is not a message.
+      if (!isId(msg.messageId)) return null;
+      const body = sanitizeText(msg.body, MAX_MESSAGE_LEN, '');
+      if (!body) return null;
+      return { t: msg.t, messageId: msg.messageId, body };
+    }
 
     default:
       return null; // an unknown type is a newer peer, not an error

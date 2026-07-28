@@ -332,6 +332,31 @@ footer p { color: var(--muted); font-size: 0.8rem; }
 
 .save-link { font-weight: 550; color: var(--accent); }
 
+/* ── messages ───────────────────────────────────────────────────────────── */
+
+.msg {
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.9rem;
+  display: grid;
+  gap: 0.45rem;
+}
+/* A dashed edge marks the ones this device sent, the same visual language the
+   drop target uses for "this is yours to act on". */
+.msg[data-dir="out"] { border-style: dashed; }
+
+.msg-head { display: flex; align-items: baseline; gap: 0.6rem; font-size: 0.78rem; color: var(--muted); }
+.msg-who { font-weight: 550; }
+.msg-time { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* pre-wrap so a rare surviving line break shows; anywhere so a long URL wraps
+   instead of forcing the card wide on a phone. */
+.msg-body { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.msg-actions { display: flex; align-items: center; gap: 0.5rem; }
+.msg-actions .btn { padding: 0.25rem 0.7rem; font-size: 0.82rem; }
+
 /* ── diagnostics ────────────────────────────────────────────────────────── */
 
 details.panel summary { cursor: pointer; display: grid; gap: 0.15rem; }
@@ -405,6 +430,18 @@ dialog::backdrop { background: rgb(8 10 14 / 55%); }
   background: var(--bg);
   color: var(--fg);
 }
+
+.msg-input {
+  font: inherit;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+  min-height: 3.2rem;
+}
+.msg-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .scan-video {
   width: 100%;

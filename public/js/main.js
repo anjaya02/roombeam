@@ -1,10 +1,11 @@
-import { $, coalesce } from './util.js';
+import { $, el, coalesce } from './util.js';
 import { normalizeCode } from '../shared/code.js';
 import { identity, knownDevices, warmFingerprints } from './identity.js';
 import { settings } from './settings.js';
 import { Signaling } from './signaling.js';
 import { PeerNetwork } from './peer.js';
 import { TransferManager, isTerminal } from './transfer.js';
+import { Messenger } from './messages.js';
 import { UI } from './ui.js';
 import { canScan, codeFromUrl, probeScanner, scanForCode } from './scan.js';
 import { capabilityRows, linkSummary, loopbackBenchmark } from './diagnostics.js';
@@ -44,6 +45,7 @@ let pendingTarget = null;
 const signaling = new Signaling(() => ({ name: identity.name, pubkey: identity.publicKey }));
 const network = new PeerNetwork(signaling, iceServers());
 const transfers = new TransferManager(network);
+const messenger = new Messenger(network);
 
 const ui = new UI({
   pickFilesFor: (peerId) => { pendingTarget = peerId; $('#picker').click(); },
@@ -52,6 +54,7 @@ const ui = new UI({
   decline: (transfer) => transfers.decline(transfer),
   cancel: (transfer) => transfers.cancel(transfer),
   savedFile: (item) => transfers.release(item),
+  copyMessage: (body) => copyToClipboard(body, 'Copied.'),
   newRoom: () => signaling.joinRoom('new'),
   openJoin: () => openDialog('#join-dialog', () => $('#join-code').focus()),
   openScan: () => startScan(),
@@ -84,6 +87,7 @@ const paintPeers = coalesce(async () => {
 // that puts layout work directly in the path of the bytes.
 const paintTransfers = coalesce(() =>
   ui.renderTransfers([...transfers.outgoing.values(), ...transfers.incoming.values()]));
+const paintMessages = coalesce(() => ui.renderMessages([...messenger.messages]));
 
 network.on('roster', paintPeers);
 network.on('link', (link) => {
@@ -109,6 +113,12 @@ transfers.on('change', paintTransfers);
 transfers.on('offer', (transfer) => {
   const count = transfer.items.length;
   ui.toast(`${transfer.link.name} wants to send ${count === 1 ? transfer.items[0].name : `${count} files`}.`);
+});
+
+messenger.on('change', paintMessages);
+messenger.on('message', (message) => {
+  // Only announce what arrives, not the local echo of what this device sent.
+  if (message.direction === 'in') ui.toast(`${message.peerName} sent a message.`);
 });
 
 // ── signalling ───────────────────────────────────────────────────────────────
@@ -175,6 +185,65 @@ function startSendAll(files) {
   ui.toast(`Offering to ${peers.length} device${peers.length === 1 ? '' : 's'} — each one accepts for itself.`);
 }
 
+// ── messages ───────────────────────────────────────────────────────────────────
+
+// A recipient value that cannot collide with a peer's session id (a UUID never
+// contains a NUL), so "everyone" is told apart from a single device by value alone.
+const MSG_EVERYONE = ' everyone';
+
+const showMessageError = (message) => {
+  const node = $('#message-error');
+  node.textContent = message;
+  node.hidden = !message;
+};
+
+$('#send-message').addEventListener('click', () => {
+  const peers = network.distinctPeers();
+  if (!peers.length) {
+    ui.toast('No other devices in the room to message yet.', 'warn');
+    return;
+  }
+
+  const options = [];
+  // Offer "everyone" only when there is more than one device to mean by it.
+  if (peers.length > 1) options.push(el('option', { value: MSG_EVERYONE, text: 'Everyone here' }));
+  for (const peer of peers) options.push(el('option', { value: peer.id, text: peer.name }));
+  $('#message-to').replaceChildren(...options);
+
+  showMessageError('');
+  openDialog('#message-dialog', () => $('#message-body').focus());
+});
+
+$('#message-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const body = $('#message-body').value.trim();
+  if (!body) { showMessageError('Type a message to send.'); return; }
+
+  const target = $('#message-to').value;
+  const peerIds = target === MSG_EVERYONE ? network.distinctPeers().map((peer) => peer.id) : [target];
+  const links = peerIds.map((id) => network.linkTo(id)).filter(Boolean);
+  if (!links.length) {
+    showMessageError('That device is no longer here.');
+    return;
+  }
+
+  // Fire and let the list echo confirm it. Recording the sent message happens once
+  // it is actually on the wire, so what the sender sees is what was delivered —
+  // not an optimistic guess that a failed connection would contradict.
+  for (const link of links) {
+    messenger.send(link, body).catch(() =>
+      ui.toast(`Could not reach ${link.name} — the message was not sent.`, 'warn'));
+  }
+
+  $('#message-body').value = '';
+  showMessageError('');
+  closeDialog('#message-dialog');
+});
+
+$('#message-cancel').addEventListener('click', () => { showMessageError(''); closeDialog('#message-dialog'); });
+
+$('#clear-messages').addEventListener('click', () => messenger.clear());
+
 // ── name ─────────────────────────────────────────────────────────────────────
 
 const nameInput = $('#myname');
@@ -220,14 +289,20 @@ $('#join-form').addEventListener('submit', (event) => {
 });
 $('#join-cancel').addEventListener('click', () => { showJoinError(''); closeDialog('#join-dialog'); });
 
-$('#copy-link').addEventListener('click', async () => {
-  const url = ui.roomUrl(signaling.room?.code ?? '');
+/** Put text on the clipboard, and fall back to simply showing it — clipboard
+ *  access is refused outside a secure context or without a fresh user gesture,
+ *  and the text on screen is the next best thing to being able to copy it. */
+async function copyToClipboard(text, successMessage) {
   try {
-    await navigator.clipboard.writeText(url);
-    ui.toast('Link copied.');
+    await navigator.clipboard.writeText(text);
+    ui.toast(successMessage);
   } catch {
-    ui.toast(url); // clipboard access refused — showing it is the next best thing
+    ui.toast(text);
   }
+}
+
+$('#copy-link').addEventListener('click', () => {
+  copyToClipboard(ui.roomUrl(signaling.room?.code ?? ''), 'Link copied.');
 });
 
 /**
@@ -411,6 +486,7 @@ async function start() {
   paintRoom();
   paintPeers();
   paintTransfers();
+  paintMessages();
 }
 
 // Following a link to a different room in an already-open tab.

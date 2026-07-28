@@ -47,12 +47,21 @@
   <section aria-labelledby="devices-heading">
     <div class="section-head">
       <h2 id="devices-heading">Devices</h2>
+      <button type="button" class="btn" id="send-message" hidden>Send a message</button>
       <button type="button" class="btn" id="send-all" hidden>Send to everyone</button>
       <label class="me" for="myname">you are
         <input id="myname" maxlength="40" autocomplete="off" spellcheck="false" enterkeyhint="done">
       </label>
     </div>
     <div id="peers" class="stack"></div>
+  </section>
+
+  <section aria-labelledby="messages-heading">
+    <div class="section-head">
+      <h2 id="messages-heading">Messages</h2>
+      <button type="button" class="link-btn" id="clear-messages" hidden>Clear</button>
+    </div>
+    <div id="messages" class="stack"></div>
   </section>
 
   <section aria-labelledby="transfers-heading">
@@ -172,6 +181,25 @@
     <div class="row-actions end">
       <button type="button" class="btn" id="join-cancel">Cancel</button>
       <button type="submit" class="btn primary">Join</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="message-dialog">
+  <form class="dialog-body" id="message-form">
+    <h2>Send a message</h2>
+    <p class="sub">A link or a short note. It appears on the other device straight away — nothing is
+      saved or opened on its own.</p>
+    <label class="field">
+      <span>To</span>
+      <select id="message-to"></select>
+    </label>
+    <textarea id="message-body" class="msg-input" maxlength="2000" rows="3" autocomplete="off"
+              placeholder="https://… or a short note" aria-label="Message"></textarea>
+    <p class="sub error" id="message-error" hidden></p>
+    <div class="row-actions end">
+      <button type="button" class="btn" id="message-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Send</button>
     </div>
   </form>
 </dialog>

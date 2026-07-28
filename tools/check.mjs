@@ -18,6 +18,8 @@ import { encodeQr } from '../public/js/qr.js';
 import { crc32, crcHex } from '../public/js/crc32.js';
 import { ALPHABET, CODE_LENGTH, formatCode, generateCode, normalizeCode } from '../public/shared/code.js';
 import { isExecutable, safeFileName, sanitizeText, trueExtension } from '../public/shared/text.js';
+import { MAX_MESSAGE_LEN, MSG, parseControl } from '../public/js/protocol.js';
+import { httpUrl } from '../public/js/messages.js';
 import { LIMITS, Rooms } from '../src/rooms.js';
 
 let passed = 0;
@@ -370,6 +372,49 @@ test('executables are recognised for the warning', () => {
   for (const name of ['photo.jpg', 'notes.txt', 'deck.pdf', 'archive.zip']) {
     ok(!isExecutable(name), name);
   }
+});
+
+// ── text messages ────────────────────────────────────────────────────────────
+
+console.log('\nText messages');
+
+test('a valid text message round-trips through the validator', () => {
+  const msg = parseControl(JSON.stringify({ t: MSG.text, messageId: 'm1', body: 'https://example.com/x' }));
+  deepStrictEqual(msg, { t: 'text', messageId: 'm1', body: 'https://example.com/x' });
+});
+
+test('a body of nothing but stripped characters is rejected', () => {
+  strictEqual(parseControl(JSON.stringify({ t: MSG.text, messageId: 'm1', body: '   ' })), null);
+  strictEqual(parseControl(JSON.stringify({ t: MSG.text, messageId: 'm1', body: `${RLO}${NUL}` })), null);
+  strictEqual(parseControl(JSON.stringify({ t: MSG.text, messageId: 'm1', body: '' })), null);
+});
+
+test('a message with no id is rejected', () => {
+  strictEqual(parseControl(JSON.stringify({ t: MSG.text, body: 'hi' })), null);
+  strictEqual(parseControl(JSON.stringify({ t: MSG.text, messageId: '', body: 'hi' })), null);
+});
+
+test('bidi overrides and control chars cannot survive into a message body', () => {
+  const msg = parseControl(JSON.stringify({ t: MSG.text, messageId: 'm1', body: `safe${RLO}txet${NUL}` }));
+  ok(msg && !msg.body.includes(RLO) && !msg.body.includes(NUL), 'the override and control char are gone');
+});
+
+test('an over-length body is clamped', () => {
+  const long = 'a'.repeat(MAX_MESSAGE_LEN + 500);
+  const msg = parseControl(JSON.stringify({ t: MSG.text, messageId: 'm1', body: long }));
+  ok(msg.body.length <= MAX_MESSAGE_LEN, `clamped to ${msg.body.length}`);
+});
+
+test('only http(s) bodies become openable links', () => {
+  strictEqual(httpUrl('https://example.com/'), 'https://example.com/');
+  strictEqual(httpUrl('http://192.168.1.4:8443/#/r/ABC12'), 'http://192.168.1.4:8443/#/r/ABC12');
+  // Anything that opens something other than a page, or is not a URL at all.
+  strictEqual(httpUrl('javascript:alert(1)'), null);
+  strictEqual(httpUrl('data:text/html,<b>x'), null);
+  strictEqual(httpUrl('file:///etc/passwd'), null);
+  strictEqual(httpUrl('example.com'), null);          // no scheme — not a URL
+  strictEqual(httpUrl('see https://example.com now'), null); // a note that mentions a link
+  strictEqual(httpUrl('just a note'), null);
 });
 
 // ── rooms ────────────────────────────────────────────────────────────────────

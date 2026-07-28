@@ -11,7 +11,7 @@
 //
 // The version string is the cache name. Bumping it is what retires an old shell.
 
-const VERSION = 'roombeam-v5';
+const VERSION = 'roombeam-v6';
 
 const SHELL = [
   '/',
@@ -28,6 +28,7 @@ const SHELL = [
   '/js/peer.js',
   '/js/protocol.js',
   '/js/transfer.js',
+  '/js/messages.js',
   '/js/awake.js',
   '/js/writers.js',
   '/js/opfs-worker.js',

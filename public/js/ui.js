@@ -27,6 +27,7 @@ export class UI {
   constructor(handlers) {
     this.#handlers = handlers;
     this.renderTransfers = coalesce((transfers) => this.#drawTransfers(transfers));
+    this.renderMessages = coalesce((messages) => this.#drawMessages(messages));
   }
 
   // ── connection state ─────────────────────────────────────────────────────
@@ -129,8 +130,10 @@ export class UI {
 
   renderPeers(peers, links) {
     const box = $('#peers');
-    // Only worth offering "send to everyone" when there is at least one someone.
+    // Only worth offering "send to everyone" or "send a message" when there is at
+    // least one someone.
     $('#send-all').hidden = !peers.length;
+    $('#send-message').hidden = !peers.length;
 
     if (!peers.length) {
       // The hotspot line earns its place here rather than only in the failure
@@ -431,6 +434,58 @@ export class UI {
     row.actions.hidden = buttons.length === 0;
   }
 
+  // ── messages ───────────────────────────────────────────────────────────────
+
+  /**
+   * Notes and links, newest first.
+   *
+   * Rebuilt wholesale on every change, unlike the transfer rows: a message list
+   * changes only when one arrives, is sent, or is cleared — never on a timer while
+   * bytes move — so there is no repaint racing a click here, and the diffing the
+   * transfer rows need would be machinery for a problem this list does not have.
+   */
+  #drawMessages(messages) {
+    const box = $('#messages');
+    $('#clear-messages').hidden = !messages.length;
+
+    if (!messages.length) {
+      box.replaceChildren(el('div', { class: 'empty', text: 'No messages yet. Send a link or a note to a device here.' }));
+      return;
+    }
+
+    box.replaceChildren(...messages.map((message) => this.#buildMessageRow(message)));
+  }
+
+  #buildMessageRow(message) {
+    const outgoing = message.direction === 'out';
+
+    const head = el('div', { class: 'msg-head' }, [
+      el('span', { class: 'msg-who', text: `${outgoing ? 'to' : 'from'} ${message.peerName}` }),
+      el('span', { class: 'msg-time', text: fmtClock(message.at) }),
+    ]);
+
+    // textContent, like every other scrap of peer-chosen text on this page. The
+    // body was already sanitised at the protocol boundary; this makes doubly sure
+    // it is placed as text and never as markup.
+    const body = el('p', { class: 'msg-body', text: message.body });
+
+    const actions = el('div', { class: 'msg-actions' });
+    actions.append(el('button', {
+      type: 'button', class: 'icon-btn', 'aria-label': 'Copy', title: 'Copy',
+      onclick: () => this.#handlers.copyMessage(message.body),
+    }, [copyIcon()]));
+
+    // Only http(s), and only ever on a click the user makes. A stranger's link is
+    // never followed on its own.
+    if (message.url) {
+      actions.append(el('a', {
+        class: 'btn', href: message.url, target: '_blank', rel: 'noopener noreferrer', text: 'Open',
+      }));
+    }
+
+    return el('article', { class: 'msg', 'data-dir': message.direction }, [head, body, actions]);
+  }
+
   // ── diagnostics ──────────────────────────────────────────────────────────
 
   renderCapabilities(rows) {
@@ -488,6 +543,32 @@ export class UI {
 
 function badge(text, tone = '', title = '') {
   return el('span', { class: `badge ${tone}`, text, title: title || false });
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** The two-sheet copy glyph, built through the SVG namespace rather than an
+ *  innerHTML string, to keep to the one-rule-throughout of never assigning
+ *  markup. */
+function copyIcon() {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  for (const d of [
+    'M16 1H4a2 2 0 0 0-2 2v12h2V3h12V1z',
+    'M20 5H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h12v14z',
+  ]) {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/** A wall-clock time for a message, in the viewer's locale. */
+function fmtClock(at) {
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 /** The right-hand figure on one file's line. */

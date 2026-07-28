@@ -258,6 +258,39 @@ try {
   `);
   check('"Send to everyone" appears once a device is present', () => ok(sendAllShown));
 
+  // ── a link, sent as a message ───────────────────────────────────────────────
+  // The other thing that crosses the channel: not a file but a short link, shown
+  // on the far device straight away — no accept prompt, because nothing is saved
+  // or opened on its own. Driven through the compose dialog a person actually
+  // uses, and this is also what opens the connection the file transfer reuses.
+  const LINK = 'https://example.com/handout';
+  await sender.eval(`
+    document.querySelector('#send-message').click();
+    document.querySelector('#message-body').value = ${JSON.stringify(LINK)};
+    document.querySelector('#message-form').requestSubmit();
+    return true;
+  `);
+
+  const message = await receiver.waitFor(`
+    const row = document.querySelector('#messages .msg');
+    return row ? {
+      body: row.querySelector('.msg-body').textContent,
+      who: row.querySelector('.msg-who').textContent,
+      open: row.querySelector('a.btn')?.getAttribute('href') ?? null,
+      copyable: Boolean(row.querySelector('.icon-btn')),
+    } : false;
+  `, 15_000, 'the message to arrive on the other device');
+
+  check('a text message arrives with no accept prompt', () => {
+    strictEqual(message.body, LINK, message.body);
+    ok(/Sender/.test(message.who), message.who);
+  });
+
+  check('an http link is offered to open, and is copyable', () => {
+    strictEqual(message.open, LINK, `open href: ${message.open}`);
+    ok(message.copyable, 'no copy control on the message');
+  });
+
   // A real drop event on the device row — the same path a person uses.
   await sender.eval(`
     const bytes = new Uint8Array(${FILE_BYTES});
