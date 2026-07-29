@@ -47,11 +47,7 @@
   <section aria-labelledby="devices-heading">
     <div class="section-head">
       <h2 id="devices-heading">Devices</h2>
-      <button type="button" class="btn" id="send-message" hidden>Send a message</button>
-      <button type="button" class="btn" id="send-all" hidden>Send to everyone</button>
-      <label class="me" for="myname">you are
-        <input id="myname" maxlength="40" autocomplete="off" spellcheck="false" enterkeyhint="done">
-      </label>
+      <button type="button" class="btn" id="send-all" hidden>Send files to all</button>
     </div>
     <div id="peers" class="stack"></div>
   </section>
@@ -59,7 +55,10 @@
   <section aria-labelledby="messages-heading">
     <div class="section-head">
       <h2 id="messages-heading">Messages</h2>
-      <button type="button" class="link-btn" id="clear-messages" hidden>Clear</button>
+      <div class="section-actions">
+        <button type="button" class="btn" id="send-message" hidden>New message</button>
+        <button type="button" class="link-btn" id="clear-messages" hidden>Clear</button>
+      </div>
     </div>
     <div id="messages" class="stack"></div>
   </section>
@@ -103,6 +102,12 @@
 <dialog id="settings-dialog">
   <form method="dialog" class="dialog-body">
     <h2>Settings</h2>
+
+    <h3>This device</h3>
+    <label class="field" for="myname">
+      <span>Device name</span>
+      <input id="myname" maxlength="40" autocomplete="off" spellcheck="false" enterkeyhint="done">
+    </label>
 
     <label class="check">
       <input type="checkbox" id="set-verify">

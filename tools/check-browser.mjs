@@ -256,7 +256,21 @@ try {
     const btn = document.querySelector('#send-all');
     return Boolean(btn) && !btn.hidden && btn.offsetParent !== null;
   `);
-  check('"Send to everyone" appears once a device is present', () => ok(sendAllShown));
+  check('"Send files to all" stays out of the way for one device', () => strictEqual(sendAllShown, false));
+
+  const messageAction = await sender.eval(`
+    const btn = document.querySelector('#send-message');
+    return {
+      text: btn.textContent,
+      inMessages: Boolean(btn.closest('section')?.querySelector('#messages')),
+      shown: !btn.hidden && btn.offsetParent !== null,
+    };
+  `);
+  check('"New message" belongs to Messages once a device is present', () => {
+    strictEqual(messageAction.text, 'New message');
+    strictEqual(messageAction.inMessages, true);
+    strictEqual(messageAction.shown, true);
+  });
 
   // ── a link, sent as a message ───────────────────────────────────────────────
   // The other thing that crosses the channel: not a file but a short link, shown

@@ -130,9 +130,14 @@ export class UI {
 
   renderPeers(peers, links) {
     const box = $('#peers');
-    // Only worth offering "send to everyone" or "send a message" when there is at
-    // least one someone.
-    $('#send-all').hidden = !peers.length;
+    // A room-wide file action only adds something when there is more than one
+    // target. With one peer, their named row is clearer and does the same job.
+    const sendAll = $('#send-all');
+    sendAll.hidden = peers.length < 2;
+    sendAll.textContent = `Send files to all (${peers.length})`;
+
+    // Message composition belongs with the message list, but it still depends
+    // on there being someone here to receive it.
     $('#send-message').hidden = !peers.length;
 
     if (!peers.length) {

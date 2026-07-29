@@ -113,6 +113,19 @@ main { display: grid; gap: 1.6rem; padding-top: 1.4rem; }
   letter-spacing: 0.07em;
   color: var(--muted);
 }
+.section-head > .btn {
+  margin-left: auto;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.82rem;
+}
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-left: auto;
+}
+.section-actions .btn { padding: 0.3rem 0.65rem; font-size: 0.82rem; }
+.section-actions .link-btn { margin-left: 0; }
 
 .stack { display: grid; gap: 0.5rem; }
 
@@ -127,19 +140,6 @@ main { display: grid; gap: 1.6rem; padding-top: 1.4rem; }
 
 .row-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center; margin-left: auto; }
 .row-actions.end { justify-content: flex-end; margin-top: 0.3rem; }
-
-.me { margin-left: auto; font-size: 0.82rem; color: var(--muted); }
-.me input {
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 0.22rem 0.45rem;
-  width: 9.5rem;
-  max-width: 40vw;
-}
-.me input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 footer p { color: var(--muted); font-size: 0.8rem; }
@@ -422,13 +422,17 @@ dialog::backdrop { background: rgb(8 10 14 / 55%); }
 .check em { font-style: normal; font-size: 0.8rem; color: var(--muted); }
 
 .field { display: grid; gap: 0.25rem; font-size: 0.86rem; }
-.field select {
+.field input, .field select {
   font: inherit;
   padding: 0.35rem 0.45rem;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--bg);
   color: var(--fg);
+}
+.field input:focus-visible, .field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .msg-input {
@@ -478,5 +482,4 @@ dialog::backdrop { background: rgb(8 10 14 / 55%); }
 @media (max-width: 30rem) {
   .qr { width: 8rem; height: 8rem; }
   .code { font-size: 1.55rem; }
-  .me { width: 100%; margin-left: 0; }
 }
